@@ -1,0 +1,10 @@
+[
+  {
+    "service": "sentinel-agent",
+    "deployed_at": "2026-10-13T09:00:00+00:00",
+    "version": "cache-fallback",
+    "author": "unknown",
+    "change_summary": "Cached fallback snapshot -- used only if the live GitHub API call fails (network error, rate limit, or timeout) so the demo never breaks on connectivity.",
+    "url": null
+  }
+]

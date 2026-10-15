@@ -1,0 +1,93 @@
+[
+  {
+    "service": "checkout-service",
+    "timestamp": "2026-10-12T13:40:00Z",
+    "level": "INFO",
+    "status_code": 200,
+    "count": 940,
+    "message": "Baseline traffic, nominal latency (p95 180ms)."
+  },
+  {
+    "service": "checkout-service",
+    "timestamp": "2026-10-12T14:02:00Z",
+    "level": "ERROR",
+    "status_code": 500,
+    "count": 128,
+    "message": "Unhandled exception in PaymentValidator.charge(): NullPointerException on tax_rate lookup.",
+    "pod": "checkout-service-7c9f8b-lgk2x",
+    "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+    "stack_trace": "java.lang.NullPointerException: Cannot invoke \"java.math.BigDecimal.multiply\" because \"rate\" is null\n    at com.shop.checkout.PaymentValidator.charge(PaymentValidator.java:88)\n    at com.shop.checkout.tax.TaxCalcClient.rateFor(TaxCalcClient.java:41)\n    at com.shop.checkout.api.CheckoutController.submit(CheckoutController.java:112)"
+  },
+  {
+    "service": "checkout-service",
+    "timestamp": "2026-10-12T14:06:00Z",
+    "level": "ERROR",
+    "status_code": 500,
+    "count": 311,
+    "message": "Unhandled exception in PaymentValidator.charge(): NullPointerException on tax_rate lookup."
+  },
+  {
+    "service": "checkout-service",
+    "timestamp": "2026-10-12T14:10:00Z",
+    "level": "ERROR",
+    "status_code": 500,
+    "count": 402,
+    "message": "Unhandled exception in PaymentValidator.charge(): NullPointerException on tax_rate lookup."
+  },
+  {
+    "service": "auth-service",
+    "timestamp": "2026-10-12T09:15:00Z",
+    "level": "WARN",
+    "status_code": 429,
+    "count": 12,
+    "message": "Rate limit threshold approaching for /login endpoint."
+  },
+  {
+    "service": "inventory-service",
+    "timestamp": "2026-10-11T22:05:00Z",
+    "level": "ERROR",
+    "status_code": 503,
+    "count": 54,
+    "message": "Connection pool exhausted while querying warehouse_db."
+  },
+  {
+    "service": "notification-service",
+    "timestamp": "2026-10-10T08:30:00Z",
+    "level": "ERROR",
+    "status_code": 502,
+    "count": 20,
+    "message": "Upstream SMTP gateway timeout."
+  },
+  {
+    "service": "payments-gateway",
+    "timestamp": "2026-10-13T16:20:00Z",
+    "level": "ERROR",
+    "status_code": 504,
+    "count": 76,
+    "message": "Timeout calling fraud-check-service from PaymentsGateway.authorize(): no response after 2000ms."
+  },
+  {
+    "service": "payments-gateway",
+    "timestamp": "2026-10-13T16:24:00Z",
+    "level": "ERROR",
+    "status_code": 504,
+    "count": 143,
+    "message": "Timeout calling fraud-check-service from PaymentsGateway.authorize(): no response after 2000ms."
+  },
+  {
+    "service": "search-service",
+    "timestamp": "2026-10-13T10:15:00Z",
+    "level": "ERROR",
+    "status_code": 504,
+    "count": 61,
+    "message": "Timeout calling search-index-cluster from SearchController.query(): no response after 3000ms."
+  },
+  {
+    "service": "checkout-service",
+    "timestamp": "2026-10-12T14:03:30Z",
+    "level": "WARN",
+    "status_code": 200,
+    "count": 57,
+    "message": "tax-calc-lib 3.0.0: rate table 'tax_rates_v3' returned 0 rows (migration 'V42__populate_tax_rates' not applied); config tax.fallback_to_legacy_table=false, tax.null_rate_guard=false."
+  }
+]

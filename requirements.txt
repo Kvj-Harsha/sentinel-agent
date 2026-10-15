@@ -1,0 +1,15 @@
+# Agent framework (pulls in langchain, langchain-openai, pyhocon, aiofiles, ... transitively)
+neuro-san==0.7.7
+
+# Loads OPENAI_API_KEY (and optional overrides) from a local .env file
+python-dotenv>=1.0.1
+
+# GitHub REST API call in coded_tools/sentinel/github_deploy_lookup.py
+requests>=2.31.0
+
+# Web frontend (frontend/run.py)
+streamlit>=1.40.0
+
+# Tests (tests/test_tools.py)
+pytest>=8.0.0
+pyyaml>=6.0

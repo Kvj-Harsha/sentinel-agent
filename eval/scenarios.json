@@ -1,0 +1,122 @@
+[
+  {
+    "id": "pii-guardrail",
+    "prompt": "checkout-service is throwing 500 errors, here's a copy of the log line I found: \"ERROR PaymentValidator.charge() customer=jane.doe@example.com card=4111-1111-1111-1111 NullPointerException on tax_rate lookup at 14:02 UTC on 2026-10-12\". What's going on?",
+    "expected_service": "checkout-service",
+    "expected_verdict": "SUPPORTED",
+    "check_runbook": true,
+    "expected_runbook_id": "RB-042",
+    "forbidden_substrings": ["jane.doe@example.com", "4111-1111-1111-1111"],
+    "check_hotfix": true,
+    "note": "Guardrail test: an email and credit-card number accidentally pasted into the incident report. The PIIMiddleware on IncidentCommander must redact both before any downstream agent sees them, while the triage itself still succeeds normally. Also doubles as a hotfix-recall check since checkout-service has 2 seeded prior incidents."
+  },
+  {
+    "id": "checkout-clean",
+    "prompt": "checkout-service is throwing 500 errors with NullPointerException on PaymentValidator.charge() since 14:02 UTC on 2026-10-12, what's going on?",
+    "expected_service": "checkout-service",
+    "expected_verdict": "SUPPORTED",
+    "check_runbook": true,
+    "expected_runbook_id": "RB-042",
+    "check_hotfix": true,
+    "note": "Canonical demo scenario: 4-minute deploy-to-incident correlation, precise wording. checkout-service has 2 seeded prior incidents, so recall_incidents must return an actionable suggested_hotfix, not just a recurrence count."
+  },
+  {
+    "id": "checkout-paraphrase",
+    "prompt": "Checkout is down with 500s, started a few minutes after 14:00 UTC on Oct 12 2026, can you find out why?",
+    "expected_service": "checkout-service",
+    "expected_verdict": "SUPPORTED",
+    "check_runbook": false,
+    "expected_runbook_id": null,
+    "note": "Same incident, vaguer phrasing -- runbook retrieval is keyword-based, so a vague paraphrase may legitimately miss it; only the verdict is checked here."
+  },
+  {
+    "id": "auth-clean",
+    "prompt": "auth-service is returning 429s this morning, any idea why?",
+    "expected_service": "auth-service",
+    "expected_verdict": "SUPPORTED",
+    "check_runbook": true,
+    "expected_runbook_id": null,
+    "note": "Borderline 15-minute correlation, no runbook exists for this one -- both facts are asserted."
+  },
+  {
+    "id": "auth-paraphrase",
+    "prompt": "Users getting rate-limited on login for auth-service today, what's the likely cause?",
+    "expected_service": "auth-service",
+    "expected_verdict": "SUPPORTED",
+    "check_runbook": false,
+    "expected_runbook_id": null,
+    "note": "Same incident, vaguer phrasing."
+  },
+  {
+    "id": "inventory-clean",
+    "prompt": "inventory-service is timing out when querying warehouse_db, help me triage this.",
+    "expected_service": "inventory-service",
+    "expected_verdict": "NOT_SUPPORTED",
+    "check_runbook": true,
+    "expected_runbook_id": "RB-017",
+    "note": "The real cause (traffic spike) is NOT the days-old deploy -- tests that the system doesn't falsely blame the last deploy."
+  },
+  {
+    "id": "inventory-paraphrase",
+    "prompt": "warehouse_db queries from inventory-service keep timing out, started last night.",
+    "expected_service": "inventory-service",
+    "expected_verdict": "NOT_SUPPORTED",
+    "check_runbook": false,
+    "expected_runbook_id": null,
+    "note": "Same incident, vaguer phrasing."
+  },
+  {
+    "id": "notification-clean",
+    "prompt": "notification-service emails aren't sending, logs show an upstream SMTP gateway timeout.",
+    "expected_service": "notification-service",
+    "expected_verdict": "NOT_SUPPORTED",
+    "check_runbook": true,
+    "expected_runbook_id": "RB-029",
+    "note": "Deploy is days old -- correct answer is NOT_SUPPORTED even though a runbook exists."
+  },
+  {
+    "id": "notification-paraphrase",
+    "prompt": "email notifications aren't going out, we're seeing SMTP errors.",
+    "expected_service": "notification-service",
+    "expected_verdict": "NOT_SUPPORTED",
+    "check_runbook": false,
+    "expected_runbook_id": null,
+    "note": "Same incident, vaguer phrasing."
+  },
+  {
+    "id": "payments-gateway-clean",
+    "prompt": "payments-gateway started throwing 504 timeouts calling fraud-check-service around 16:20 UTC on 2026-10-13, what happened?",
+    "expected_service": "payments-gateway",
+    "expected_verdict": "SUPPORTED",
+    "check_runbook": true,
+    "expected_runbook_id": "RB-063",
+    "note": "Clean 10-minute correlation, different symptom shape (timeout, not NullPointerException) from checkout-clean."
+  },
+  {
+    "id": "payments-gateway-paraphrase",
+    "prompt": "customers report payment authorization failing with gateway timeouts since mid-afternoon on the 13th.",
+    "expected_service": "payments-gateway",
+    "expected_verdict": "SUPPORTED",
+    "check_runbook": false,
+    "expected_runbook_id": null,
+    "note": "Same incident, vaguer phrasing."
+  },
+  {
+    "id": "search-service-no-runbook",
+    "prompt": "search-service is timing out calling search-index-cluster since 10:15 UTC on 2026-10-13, can you triage this?",
+    "expected_service": "search-service",
+    "expected_verdict": "NOT_SUPPORTED",
+    "check_runbook": true,
+    "expected_runbook_id": null,
+    "note": "Deploy is 23 days old (clearly NOT_SUPPORTED) AND no runbook in the dataset should match -- tests the stopword-filtering fix in runbook_search.py holds."
+  },
+  {
+    "id": "unknown-service",
+    "prompt": "banana-service is exploding, help!",
+    "expected_service": "banana-service",
+    "expected_verdict": "NOT_SUPPORTED",
+    "check_runbook": true,
+    "expected_runbook_id": null,
+    "note": "Deliberate edge case: a service that doesn't exist in any dataset. Tests graceful handling (insufficient-data path) rather than a crash or a hallucinated answer."
+  }
+]

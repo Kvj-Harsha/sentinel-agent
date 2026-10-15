@@ -1,0 +1,8 @@
+{
+  "alert_type": "warning",
+  "title": "[Triggered] warehouse_db connection pool exhaustion on inventory-service",
+  "body": "inventory-service is timing out when querying warehouse_db.",
+  "host": "inventory-service-9d4e7a-wp3kl",
+  "tags": ["service:inventory-service", "env:prod", "team:fulfillment"],
+  "date": "2026-10-11T22:05:00Z"
+}

@@ -1,0 +1,8 @@
+{
+  "alert_type": "error",
+  "title": "[Triggered] High 5xx rate on checkout-service",
+  "body": "ERROR PaymentValidator.charge() customer=jane.doe@example.com card=4111-1111-1111-1111 NullPointerException on tax_rate lookup at 14:02 UTC on 2026-10-12.",
+  "host": "checkout-service-7c9f8b-lgk2x",
+  "tags": ["service:checkout-service", "env:prod", "team:payments"],
+  "date": "2026-10-12T14:02:00Z"
+}

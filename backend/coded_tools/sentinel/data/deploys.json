@@ -1,0 +1,51 @@
+[
+  {
+    "service": "checkout-service",
+    "version": "v2.14.0",
+    "deployed_at": "2026-10-12T13:58:00Z",
+    "author": "a.kumar",
+    "change_summary": "Refactored PaymentValidator to call the new tax-calculation library (tax-calc-lib v3) instead of the legacy inline tax table."
+  },
+  {
+    "service": "checkout-service",
+    "version": "v2.13.4",
+    "deployed_at": "2026-10-09T10:00:00Z",
+    "author": "s.lee",
+    "change_summary": "Minor UI copy changes on the order confirmation page."
+  },
+  {
+    "service": "auth-service",
+    "version": "v1.8.2",
+    "deployed_at": "2026-10-12T09:00:00Z",
+    "author": "r.singh",
+    "change_summary": "Adjusted login rate-limit thresholds."
+  },
+  {
+    "service": "inventory-service",
+    "version": "v3.2.0",
+    "deployed_at": "2026-10-08T17:00:00Z",
+    "author": "a.kumar",
+    "change_summary": "Increased warehouse_db connection pool size from 20 to 40."
+  },
+  {
+    "service": "notification-service",
+    "version": "v1.1.0",
+    "deployed_at": "2026-10-05T12:00:00Z",
+    "author": "m.patel",
+    "change_summary": "Switched SMTP provider."
+  },
+  {
+    "service": "payments-gateway",
+    "version": "v4.0.1",
+    "deployed_at": "2026-10-13T16:10:00Z",
+    "author": "j.nguyen",
+    "change_summary": "Lowered the fraud-check-service client timeout from 5000ms to 2000ms to reduce checkout latency."
+  },
+  {
+    "service": "search-service",
+    "version": "v1.9.0",
+    "deployed_at": "2026-09-20T09:00:00Z",
+    "author": "t.okafor",
+    "change_summary": "Upgraded search-index-cluster client library to v2."
+  }
+]

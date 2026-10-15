@@ -1,0 +1,94 @@
+\documentclass[tikz, border=12pt]{standalone}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, positioning}
+
+\definecolor{commander}{HTML}{1B2A4A}
+\definecolor{agent}{HTML}{3B5BA9}
+\definecolor{tool}{HTML}{1C8C7C}
+\definecolor{lifeline}{HTML}{9CA3AF}
+\definecolor{edge}{HTML}{3F3F46}
+\definecolor{activ}{HTML}{E8EAF0}
+\definecolor{selfmsg}{HTML}{1C8C7C}
+
+\begin{document}
+\begin{tikzpicture}[
+  font=\sffamily,
+  >=Stealth,
+  >={Stealth[length=2.2mm]},
+  every node/.style={align=center},
+  actor/.style={rounded corners=3pt, draw=black!50, fill=#1, text=white, font=\sffamily\small\bfseries, minimum width=30mm, minimum height=8mm},
+  msg/.style={-{Stealth[length=2mm]}, color=edge, font=\sffamily\scriptsize},
+  ret/.style={-{Stealth[length=2mm]}, color=edge, dashed, font=\sffamily\scriptsize},
+  lifel/.style={color=lifeline, dashed},
+  actv/.style={fill=activ, draw=black!30},
+]
+
+% ---- x-coordinates for each lifeline ----
+\def\xA{0}     % Alert Source
+\def\xC{3.4}   % IncidentCommander
+\def\xH{7.0}   % HistorianAgent
+\def\xT{10.6}  % TicketAgent
+\def\xS{14.6}  % Specialists (Logs/Deploy/Runbook)
+\def\xSc{18.8} % Scribe
+
+\def\ytop{0}
+
+% ---- Actor headers ----
+\node[actor=black!55] (A) at (\xA,\ytop) {Streamlit UI /\\alert preset};
+\node[actor=commander] (C) at (\xC,\ytop) {Incident\\Commander};
+\node[actor=agent] (H) at (\xH,\ytop) {Historian\\Agent};
+\node[actor=agent] (T) at (\xT,\ytop) {Ticket\\Agent};
+\node[actor=agent] (S) at (\xS,\ytop) {Logs / Deploy / Runbook\\Agents};
+\node[actor=commander] (Sc) at (\xSc,\ytop) {Scribe};
+
+% ---- lifelines ----
+\def\ybot{-20.5}
+\foreach \x in {\xA,\xC,\xH,\xT,\xS,\xSc} {
+  \draw[lifel] (\x,-0.9) -- (\x,\ybot);
+}
+
+% ---- helper macro for a y-coordinate that decrements each call ----
+\newcounter{step}
+\setcounter{step}{0}
+\newcommand{\sy}[1]{\addtocounter{step}{-1}\pgfmathsetmacro{\yy}{-1.6 + #1*(-1.15)}}
+
+% Using explicit y-values for full control instead of the counter macro above.
+
+% 0. Alert -> Commander
+\draw[msg] (\xA,-1.6) -- node[above, pos=0.5, align=center]{alert payload $\rightarrow$ composed report (no LLM)\\invoke\_agent(report)} (\xC,-1.6);
+
+% 1. Commander -> Historian (recall)
+\draw[msg] (\xC,-2.8) -- node[above, pos=0.5]{\textbf{1} recall\_incidents(service)} (\xH,-2.8);
+\draw[ret] (\xH,-3.6) -- node[below, pos=0.5]{prior incidents + suggested\_hotfix} (\xC,-3.6);
+
+% 2. Commander -> TicketAgent (open)
+\draw[msg] (\xC,-4.8) -- node[above, pos=0.5]{\textbf{2} open\_ticket(service, desc)} (\xT,-4.8);
+\draw[ret] (\xT,-5.6) -- node[below, pos=0.5]{INC1200\#\# -- "In Progress"} (\xC,-5.6);
+
+% 3. Commander -> Specialists (parallel fan-out)
+\draw[msg] (\xC,-6.8) -- node[above, pos=0.5]{\textbf{3--5} logs\_lookup / deploy\_lookup (or github\_deploy\_lookup) / runbook\_search} (\xS,-6.8);
+\draw[ret] (\xS,-7.8) -- node[below, pos=0.45, align=center]{anomaly timestamp + deploy record +\\runbook match (Confluence fields)} (\xC,-7.8);
+
+% 4. Commander -> Scribe
+\draw[msg] (\xC,-9.2) -- node[above, pos=0.5, align=center]{\textbf{6} draft hypothesis + all gathered\\evidence + suggested\_hotfix} (\xSc,-9.2);
+
+% 5. Scribe self-call: correlation_check
+\node[rounded corners=2pt, fill=tool, text=white, font=\sffamily\scriptsize, minimum width=28mm, minimum height=7mm] at (\xSc+1.9,-10.8) {correlation\_check\\(coded tool)};
+\draw[msg, color=selfmsg] (\xSc,-10.2) .. controls +(1.0,0) and +(1.0,-1.0) .. node[below=1mm, align=left, text=selfmsg, font=\sffamily\scriptsize]{re-derives incident/deploy\\timestamps from source data} (\xSc,-11.4);
+
+% 5'. Scribe -> Commander
+\draw[ret] (\xSc,-12.4) -- node[above, pos=0.5, align=center]{SUPPORTED / NOT\_SUPPORTED\\verdict + reasoning} (\xC,-12.4);
+
+% 6. Commander -> TicketAgent (update/resolve)
+\draw[msg] (\xC,-13.8) -- node[above, pos=0.5]{\textbf{7} update\_ticket(work\_note)} (\xT,-13.8);
+\draw[ret] (\xT,-14.6) -- node[below, pos=0.5]{state derived from verdict: Resolved} (\xC,-14.6);
+
+% 7. Commander -> Historian (record)
+\draw[msg] (\xC,-15.8) -- node[above, pos=0.5]{\textbf{8} record\_incident(hypothesis, verdict, runbook\_id)} (\xH,-15.8);
+\draw[ret] (\xH,-16.6) -- node[below, pos=0.5]{stored once (idempotent per incident)} (\xC,-16.6);
+
+% 8. Commander -> Alert source (final answer)
+\draw[msg, line width=0.9pt] (\xC,-18.0) -- node[above, pos=0.5, align=center]{final answer + sly\_data (ticket \#, verified facts)\\UI shows answer, ticket card, ``Verified by tools''} (\xA,-18.0);
+
+\end{tikzpicture}
+\end{document}

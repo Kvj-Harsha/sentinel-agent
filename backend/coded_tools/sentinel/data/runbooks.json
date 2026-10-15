@@ -1,0 +1,50 @@
+[
+  {
+    "id": "RB-042",
+    "title": "Elevated 500s on checkout-service after a tax/payment library deploy",
+    "trigger_keywords": ["500", "checkout", "payment", "paymentvalidator", "tax", "deploy", "nullpointer"],
+    "root_cause": "A new tax-calculation library version was deployed without a required config migration, causing null tax_rate lookups and NullPointerExceptions in PaymentValidator.charge().",
+    "recommended_action": "Roll back checkout-service to the previous version. File a follow-up ticket to add the missing tax-rate config migration before re-deploying.",
+    "related_incident": "INC-2025-114",
+    "page_id": "884737",
+    "space": {"key": "SRE", "name": "Site Reliability"},
+    "version": {"number": 4, "when": "2026-09-22T10:05:00+00:00"},
+    "webui_link": "/wiki/spaces/SRE/pages/884737/RB-042+checkout-service+500s+after+tax+library+deploy"
+  },
+  {
+    "id": "RB-017",
+    "title": "Database connection pool exhaustion on inventory-service",
+    "trigger_keywords": ["503", "inventory", "connection pool", "warehouse_db"],
+    "root_cause": "Traffic spike exceeded the configured connection pool size, causing request queuing and timeouts.",
+    "recommended_action": "Temporarily increase the connection pool size and add autoscaling alerts on pool utilization.",
+    "related_incident": "INC-2025-071",
+    "page_id": "884801",
+    "space": {"key": "SRE", "name": "Site Reliability"},
+    "version": {"number": 2, "when": "2025-11-03T14:20:00+00:00"},
+    "webui_link": "/wiki/spaces/SRE/pages/884801/RB-017+inventory-service+connection+pool+exhaustion"
+  },
+  {
+    "id": "RB-029",
+    "title": "SMTP gateway timeouts after notification-service provider switch",
+    "trigger_keywords": ["502", "smtp", "notification", "email", "smtp gateway"],
+    "root_cause": "The new SMTP provider enforced stricter per-connection rate limits than the previous provider.",
+    "recommended_action": "Add exponential backoff and request a rate-limit increase from the SMTP provider.",
+    "related_incident": "INC-2025-098",
+    "page_id": "884912",
+    "space": {"key": "SRE", "name": "Site Reliability"},
+    "version": {"number": 1, "when": "2025-12-11T09:40:00+00:00"},
+    "webui_link": "/wiki/spaces/SRE/pages/884912/RB-029+SMTP+gateway+timeouts"
+  },
+  {
+    "id": "RB-063",
+    "title": "payments-gateway timeouts after fraud-check-service integration deploy",
+    "trigger_keywords": ["payments-gateway", "paymentsgateway", "fraud-check-service", "fraud check", "authorize"],
+    "root_cause": "A deploy lowered the fraud-check-service client timeout, causing legitimate slow responses from fraud-check-service to be treated as failures.",
+    "recommended_action": "Roll back the fraud-check-service client timeout change, or raise it back while fraud-check-service's own latency is investigated separately.",
+    "related_incident": "INC-2025-142",
+    "page_id": "885030",
+    "space": {"key": "SRE", "name": "Site Reliability"},
+    "version": {"number": 3, "when": "2026-10-01T16:45:00+00:00"},
+    "webui_link": "/wiki/spaces/SRE/pages/885030/RB-063+payments-gateway+timeouts+after+fraud-check+deploy"
+  }
+]

@@ -1,0 +1,16 @@
+route:
+  receiver: sentinel
+  group_by: [alertname, service]
+  group_wait: 1s
+  group_interval: 30s
+  repeat_interval: 1h
+
+receivers:
+  - name: sentinel
+    webhook_configs:
+      - url: http://host.docker.internal:8090/alerts/alertmanager
+        send_resolved: false
+        http_config:
+          authorization:
+            type: Bearer
+            credentials_file: /run/secrets/sentinel_webhook_token

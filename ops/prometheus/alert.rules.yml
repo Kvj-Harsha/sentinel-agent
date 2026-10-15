@@ -1,0 +1,15 @@
+groups:
+  - name: sentinel-demo
+    interval: 10s
+    rules:
+      - alert: SentinelCheckoutHigh5xxRate
+        expr: sum(rate(checkout_requests_total{status="error"}[1m])) > 0.5
+        for: 15s
+        labels:
+          severity: critical
+          service: checkout-service
+          environment: demo
+          team: payments
+        annotations:
+          summary: "Checkout API elevated HTTP 5xx rate"
+          description: "Measured checkout failures exceed 0.5 requests/second for 15 seconds. Investigate checkout-service and the latest repair change."

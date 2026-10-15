@@ -1,0 +1,13 @@
+# checkout-service runtime configuration (as deployed with v2.14.0)
+service: checkout-service
+version: v2.14.0
+tax:
+  library: tax-calc-lib
+  library_version: "3.0.0"
+  # v3 reads rates from the new table; the migration that populates it was never run in prod.
+  rate_table_migration: false
+  fallback_to_legacy_table: false
+  null_rate_guard: false
+payments:
+  timeout_ms: 3000
+  retries: 2

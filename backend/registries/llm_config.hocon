@@ -1,0 +1,34 @@
+# Shared LLM configuration for the Sentinel agent network.
+#
+# Default: native OpenAI (reads OPENAI_API_KEY from the environment / .env).
+# Resilience: a two-model fallback chain -- if the primary model errors out (outage, rate
+# limit), neuro-san retries the call on the next entry. Both entries cap max_tokens so one
+# call can't run away. This guards against *availability* failures, not content-quality
+# variance; content quality is what eval/run_eval.py is for.
+#
+# Overrides (all optional, via environment / .env):
+#   SENTINEL_PRIMARY_MODEL   replace the primary model name
+#   SENTINEL_FALLBACK_MODEL  replace the fallback model name
+#   OPENAI_API_BASE          point the "openai" class at another OpenAI-compatible endpoint,
+#                            e.g. https://openrouter.ai/api/v1 (then use that provider's model
+#                            slugs, e.g. openai/gpt-4o-mini + anthropic/claude-haiku-4.5 for a
+#                            cross-provider fallback chain).
+{
+    "llm_config": {
+        "fallbacks": [
+            {
+                "class": "openai",
+                "model_name": "gpt-4o-mini",
+                "model_name": ${?SENTINEL_PRIMARY_MODEL},
+                "max_tokens": 2048,
+                "max_retries": 1
+            },
+            {
+                "class": "openai",
+                "model_name": "gpt-4.1-mini",
+                "model_name": ${?SENTINEL_FALLBACK_MODEL},
+                "max_tokens": 2048
+            }
+        ]
+    }
+}

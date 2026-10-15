@@ -1,0 +1,8 @@
+{
+  "alert_type": "error",
+  "title": "[Triggered] 504 timeouts on payments-gateway",
+  "body": "payments-gateway started throwing 504 timeouts calling fraud-check-service around 16:20 UTC on 2026-10-13.",
+  "host": "payments-gateway-5f2a1c-qz9wj",
+  "tags": ["service:payments-gateway", "env:prod", "team:payments"],
+  "date": "2026-10-13T16:20:00Z"
+}

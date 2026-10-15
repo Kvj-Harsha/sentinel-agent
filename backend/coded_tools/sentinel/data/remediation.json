@@ -1,0 +1,15 @@
+{
+  "checkout-service": {
+    "runbook_id": "RB-042",
+    "config_file": "configs/checkout-service.yaml",
+    "fix_summary": "Re-enable the legacy tax-table fallback and guard against null tax rates until the tax-rate migration is run (RB-042 interim mitigation; avoids a full rollback).",
+    "patches": [
+      {"path": "tax.fallback_to_legacy_table", "value": true},
+      {"path": "tax.null_rate_guard", "value": true}
+    ],
+    "required_config_keys": ["service", "version", "tax", "payments"],
+    "dependency_advisories": [
+      {"package": "tax-calc-lib", "affected_versions": ["2.9.1"], "id": "GHSA-demo-0001", "severity": "high"}
+    ]
+  }
+}

@@ -1,0 +1,20 @@
+[
+  {
+    "session_id": "seed-0001",
+    "service_name": "checkout-service",
+    "hypothesis": "A checkout-service deploy that touched the tax-calculation path caused NullPointerExceptions in PaymentValidator.charge().",
+    "verdict": "SUPPORTED",
+    "runbook_id": "RB-042",
+    "summary": "checkout-service threw 500s after a tax-calc library deploy missed a config migration; rolled back.",
+    "recorded_at": "2026-08-14T11:05:00+00:00"
+  },
+  {
+    "session_id": "seed-0002",
+    "service_name": "checkout-service",
+    "hypothesis": "A checkout-service deploy that changed PaymentValidator's tax handling caused NullPointerExceptions on tax_rate lookup.",
+    "verdict": "SUPPORTED",
+    "runbook_id": "RB-042",
+    "summary": "Second occurrence of the same tax-calc config migration issue after a follow-up deploy; rolled back again.",
+    "recorded_at": "2026-09-22T09:40:00+00:00"
+  }
+]

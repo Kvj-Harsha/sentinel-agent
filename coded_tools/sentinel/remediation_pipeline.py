@@ -160,7 +160,8 @@ class RemediationPipeline(CodedTool):
 
     @staticmethod
     def _persist_repair_binding(
-        sly_data: Dict[str, Any], service_name: str, plan: Dict[str, Any], facts: Dict[str, Any]
+        sly_data: Dict[str, Any], service_name: str, plan: Dict[str, Any], facts: Dict[str, Any],
+        patch: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Persist a compact incident/evidence binding for the separate approval UI."""
         ticket_number = sly_data.get("sentinel_ticket_number")
@@ -200,6 +201,9 @@ class RemediationPipeline(CodedTool):
                 and correlation.get("service_name") == service_name and log_refs and deploy_refs
             ),
         }
+        if patch:
+            # An LLM-written code patch: the PR must contain exactly this content (verified by hash).
+            binding["patch"] = {key: patch[key] for key in ("path", "content", "content_sha256", "base_sha256", "summary")}
         store = TicketStore()
         ticket = store.get(ticket_number)
         if ticket is None or ticket.get("session_id") != session_id:

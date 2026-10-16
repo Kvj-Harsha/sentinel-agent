@@ -19,6 +19,7 @@ services:
       # The checkout demo app runs in its own container: Sentinel writes the approved settings to the shared volume
       # it reads from, and verifies recovery over the host port.
       SENTINEL_DEMO_APP_CONFIG_PATH: /demo-config/settings.json
+      SENTINEL_DEMO_APP_CODE_PATH: /demo-config/pricing.py
       SENTINEL_DEMO_APP_URL: http://host.docker.internal:8000
       SENTINEL_DEMO_APP_PUBLIC_URL: http://127.0.0.1:8000
     ports:
@@ -51,6 +52,7 @@ services:
       # The checkout demo app runs in its own container: Sentinel writes the approved settings to the shared volume
       # it reads from, and verifies recovery over the host port.
       SENTINEL_DEMO_APP_CONFIG_PATH: /demo-config/settings.json
+      SENTINEL_DEMO_APP_CODE_PATH: /demo-config/pricing.py
       SENTINEL_DEMO_APP_URL: http://host.docker.internal:8000
       SENTINEL_DEMO_APP_PUBLIC_URL: http://127.0.0.1:8000
     volumes:

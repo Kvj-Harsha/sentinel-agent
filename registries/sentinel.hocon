@@ -50,13 +50,16 @@ You are the Incident Commander of Sentinel. For an incident report (service, sym
    estimate one.
 3. Give the Scribe your draft hypothesis (it MUST name the affected service verbatim) plus the evidence summaries and the
    runbook match (exact id, title, recommended action and link). The Scribe runs the deterministic correlation check.
-4. Ask the Responder to finalize the incident, then answer. Never claim a repair was applied; a human must review and
+4. Only if the Scribe reports SUPPORTED: ask the FixAgent to repair the code. Give it the service_name and the exact error
+   line(s) LogsAgent returned (exception type, source line and failing market). It reads the failing file and submits a fix
+   that Sentinel verifies in a sandbox. Skip this step when the verdict is NOT_SUPPORTED.
+5. Ask the Responder to finalize the incident, then answer. Never claim a repair was applied; a human must review and
    merge the PR.
 Your final answer is the Scribe's short summary followed by the Responder's finalize `report` block copied VERBATIM (ticket,
 verdict, runbook, hotfix, evidence sources). Never restate or reword those lines and never contradict them; state NOT_SUPPORTED
 plainly, never smooth it over.
 """ ${this_is_not_a_game} "\n" ${exact_values_rule} "\n" ${aaosa_instructions}
-        tools = ["Responder", "LogsAgent", "MetricsAgent", "DeployHistoryAgent", "RunbookAgent", "Scribe"]
+        tools = ["Responder", "LogsAgent", "MetricsAgent", "DeployHistoryAgent", "RunbookAgent", "Scribe", "FixAgent"]
         # sly_data is the framework's private control channel and is not returned upstream by default. Allowing
         # these keys lets the UI show the tool-verified facts and reuse the ticket on follow-up turns.
         allow {
@@ -139,6 +142,24 @@ and its reasoning; if NOT_SUPPORTED say so plainly and recommend further investi
 runbook (exact id, title and link if you were given one), Recommended action consistent with the verdict.
 """ ${this_is_not_a_game} "\n" ${exact_values_rule} "\n" ${aaosa_instructions}
         tools = ["correlation_check"]
+    }
+    {
+        name = "FixAgent"
+        function = ${aaosa_call}{
+            description = "After a SUPPORTED root cause, reads the failing source file and writes a code fix that Sentinel verifies in a sandbox."
+        }
+        instructions = """
+You repair the code defect behind a VERIFIED incident. Only act when you are told the root cause is SUPPORTED.
+1. Call read_source_file with path "app/pricing.py" (the only file you may change) and the service_name.
+2. Use the error line(s) you were given (exception type, failing source line, failing market) to find the defect. Write the
+   COMPLETE corrected file: the smallest change that fixes it, keeping every function name and its arguments, using only the
+   standard library, and keeping the behaviour of markets that already work.
+3. Call submit_code_fix once with path, new_content (the full file, no line numbers) and summary (one sentence).
+4. If the result lists a failed check, correct exactly that problem and call submit_code_fix again (at most twice more).
+Report the checks verbatim and whether they all passed. Never claim the fix is deployed or merged: Sentinel opens a pull
+request and a human must review and merge it.
+""" ${this_is_not_a_game} "\n" ${aaosa_instructions}
+        tools = ["read_source_file", "submit_code_fix"]
     }
     {
         name = "Responder"
@@ -373,5 +394,54 @@ facts, so it takes no required arguments. The ticket stays In Progress; only the
             }
         }
         class = "coded_tools.sentinel.finalize_incident.FinalizeIncident"
+    }
+    {
+        name = "read_source_file"
+        function {
+            description = "Reads one allow-listed source file of the failing service (read-only) so a fix can be written. Returns the file with line numbers."
+            parameters {
+                type = "object"
+                properties {
+                    path {
+                        type = "string"
+                        description = "Repository-relative path. Only app/pricing.py is allowed for checkout-service."
+                    }
+                    service_name {
+                        type = "string"
+                        description = "The affected service, e.g. checkout-service."
+                    }
+                }
+                required = ["path"]
+            }
+        }
+        class = "coded_tools.sentinel.code_fix.ReadSourceFile"
+    }
+    {
+        name = "submit_code_fix"
+        function {
+            description =
+"""Submits the COMPLETE corrected file for verification. Sentinel checks size, syntax and safe imports, that the public API is
+preserved, that supported markets are unchanged and that the logged failing markets are fixed, all in a sandbox. Only a patch
+that passes every check can become a pull request. Requires a SUPPORTED verdict and a prior read_source_file call."""
+            parameters {
+                type = "object"
+                properties {
+                    path {
+                        type = "string"
+                        description = "The same path you read."
+                    }
+                    new_content {
+                        type = "string"
+                        description = "The full corrected file contents, without line numbers."
+                    }
+                    summary {
+                        type = "string"
+                        description = "One sentence describing the fix."
+                    }
+                }
+                required = ["path", "new_content", "summary"]
+            }
+        }
+        class = "coded_tools.sentinel.code_fix.SubmitCodeFix"
     }
 ]

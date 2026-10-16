@@ -3,10 +3,17 @@
 import logging
 from typing import Any
 from typing import Dict
+from typing import Optional
 from typing import Union
 
 from neuro_san.interfaces.coded_tool import CodedTool
 
+import os
+import time
+
+from coded_tools.sentinel import github_pr_client
+from coded_tools.sentinel import ticket_notes
+from coded_tools.sentinel.mode import demo_mode
 from coded_tools.sentinel.record_incident import RecordIncident
 from coded_tools.sentinel.remediation_pipeline import RemediationPipeline
 from coded_tools.sentinel.remediation_pipeline import plan_exists
@@ -38,6 +45,13 @@ def build_report(sly_data: Dict[str, Any]) -> str:
         lines.append("Runbook: none matched")
     hotfix = (facts.get("memory") or {}).get("suggested_hotfix")
     lines.append(f"Suggested hotfix: {hotfix}" if hotfix else "Suggested hotfix: none on record")
+    remediation = facts.get("remediation")
+    if remediation:
+        passed = sum(1 for check in remediation.get("checks", []) if check.get("status") == "passed")
+        total = len(remediation.get("checks", []))
+        lines.append(f"Proposed fix: {remediation.get('fix_summary')} ({remediation.get('config_file')}); sandbox checks {passed}/{total} passed")
+    if ticket.get("repair_pr_number"):
+        lines.append(f"Repair PR: #{ticket['repair_pr_number']} awaiting human review (not merged)")
     grouped: Dict[str, Dict[str, Any]] = {}
     for record in facts.get("evidence") or []:
         label = dict(_EVIDENCE_LABELS).get(record.get("evidence_type"))
@@ -49,6 +63,33 @@ def build_report(sly_data: Dict[str, Any]) -> str:
         entry = grouped.get(label)
         lines.append(f"{label}: {entry['count']} record(s), {'/'.join(sorted(entry['status']))}" if entry else f"{label}: no evidence published")
     return "\n".join(lines)
+
+
+def _open_repair_pr(number: str, sly_data: Dict[str, Any]) -> Optional[str]:
+    """
+    Live mode only: open the GitHub issue and repair PR automatically once the patch passed validation. A human still
+    reviews the diff and CI and merges; this only removes the click that created the PR.
+    """
+    if demo_mode() or os.environ.get("SENTINEL_AUTO_PR", "true").strip().lower() in {"0", "false", "no", "off"}:
+        return None
+    store = TicketStore()
+    ticket = store.get(number) or {}
+    context = ticket.get("repair_context") or {}
+    if ticket.get("repair_pr_number") or not context.get("eligible") or not github_pr_client.is_configured():
+        return None
+    try:
+        pr = github_pr_client.create_repair_pr(number, context, ticket.get("session_id", ""))
+    except github_pr_client.GithubPullRequestError as exc:
+        ticket_notes.add_note(sly_data, f"[GitHub] Repair PR was not opened automatically: {exc}")
+        return None
+    store.update(number, {"repair_pr_number": str(pr["number"]), "sys_updated_on": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
+    store.append_audit_event(
+        "repair.pr_created", "ticket", number, fingerprint=ticket.get("alert_fingerprint"), session_id=ticket.get("session_id"),
+        details={"actor": "sentinel-auto", "outcome": "success", "repair_pr_number": str(pr["number"])},
+    )
+    issue = f"GitHub issue #{pr['sentinel_issue_number']} created first: {pr['sentinel_issue_url']}. " if pr.get("sentinel_issue_number") else ""
+    ticket_notes.add_note(sly_data, f"[GitHub] {issue}Repair PR #{pr['number']} opened for human review: {pr['html_url']}")
+    return pr["html_url"]
 
 
 class FinalizeIncident(CodedTool):
@@ -95,7 +136,11 @@ class FinalizeIncident(CodedTool):
         outcome = {"verdict": correlation["verdict"], "recorded": True, "repair_proposed": False}
 
         number = sly_data.get("sentinel_ticket_number")
-        if correlation["verdict"] == "SUPPORTED" and number and plan_exists(service_name):
+        code_fix_ran = bool(facts.get("remediation"))
+        # The offline replay keeps its fixture remediation plan; in live mode a repair exists only if the FixAgent's
+        # patch passed validation, so a code bug is never "fixed" by an unrelated settings change.
+        use_fixture_plan = demo_mode() and plan_exists(service_name)
+        if correlation["verdict"] == "SUPPORTED" and number and (code_fix_ran or use_fixture_plan):
             if not facts.get("remediation"):
                 RemediationPipeline().invoke({"service_name": service_name}, sly_data)
             remediation = (sly_data.get("sentinel_verified") or {}).get("remediation") or {}
@@ -113,6 +158,7 @@ class FinalizeIncident(CodedTool):
                 )
             outcome["repair_proposed"] = bool(remediation)
             outcome["preflight_passed"] = bool(remediation.get("all_passed"))
+        outcome["pr"] = _open_repair_pr(number, sly_data) if outcome["repair_proposed"] else None
         outcome["report"] = build_report(sly_data)
         outcome["summary"] = (
             "Incident recorded. "

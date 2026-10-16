@@ -73,6 +73,31 @@ def _request(session: requests.Session, method: str, path: str, **kwargs: Any) -
     return response
 
 
+def default_branch() -> str:
+    """:return: the demo repository's default branch name."""
+    return _request(_session(), "GET", "").json()["default_branch"]
+
+
+def file_at_ref(path: str, ref: str) -> str:
+    """:return: the UTF-8 text of a repository file at a branch or commit (read-only)."""
+    encoded = _request(_session(), "GET", f"/contents/{path}", params={"ref": ref}).json()
+    try:
+        return base64.b64decode(encoded["content"]).decode("utf-8")
+    except (KeyError, ValueError, UnicodeDecodeError) as exc:
+        raise GithubPullRequestError(f"{path} is not readable text at the requested commit.") from exc
+
+
+def _patch_of(context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The validated LLM code patch bound to this incident, if the repair is a code fix."""
+    patch = context.get("patch")
+    return patch if isinstance(patch, dict) and patch.get("path") and patch.get("content") else None
+
+
+def _branch_for(ticket_number: str, context: Dict[str, Any]) -> str:
+    prefix = "sentinel/fix-" if _patch_of(context) else "sentinel/disable-demo-fault-"
+    return f"{prefix}{ticket_number.lower()}"
+
+
 def validate_repair_context(ticket_number: str, context: Dict[str, Any], ticket_session_id: str) -> None:
     """Reject PR operations unless the stored, tool-verified incident binding is complete."""
     if not re.fullmatch(r"INC\d+", str(ticket_number)):
@@ -103,6 +128,9 @@ def _binding_marker(ticket_number: str, context: Dict[str, Any]) -> str:
         "evidence_refs": context.get("evidence_refs") or [],
         "all_passed": bool(context.get("all_passed")),
     }
+    patch = _patch_of(context)
+    if patch:  # only code patches add this key, so existing settings-repair markers keep their value
+        payload["patch_sha256"] = patch.get("content_sha256")
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:20]
     return f"<!-- sentinel-binding:{digest} -->"
 
@@ -113,7 +141,8 @@ def create_repair_pr(ticket_number: str, repair_context: Dict[str, Any], ticket_
     session = _session()
     repo_data = _request(session, "GET", "").json()
     base = repo_data["default_branch"]
-    branch = f"sentinel/disable-demo-fault-{ticket_number.lower()}"
+    patch = _patch_of(repair_context)
+    branch = _branch_for(ticket_number, repair_context)
     existing_prs = _request(
         session,
         "GET",
@@ -128,14 +157,16 @@ def create_repair_pr(ticket_number: str, repair_context: Dict[str, Any], ticket_
 
     base_ref = _request(session, "GET", f"/git/ref/heads/{base}").json()
     _request(session, "POST", "/git/refs", json={"ref": f"refs/heads/{branch}", "sha": base_ref["object"]["sha"]})
-    original = _request(session, "GET", f"/contents/{CONFIG_PATH}", params={"ref": base}).json()
-    safe_content = json.dumps(SAFE_SETTINGS, indent=2) + "\n"
+    target_path = patch["path"] if patch else CONFIG_PATH
+    original = _request(session, "GET", f"/contents/{target_path}", params={"ref": base}).json()
+    safe_content = patch["content"] if patch else json.dumps(SAFE_SETTINGS, indent=2) + "\n"
+    summary = (patch or {}).get("summary") or "Disable the local demo fault switch and set checkout error rate to zero."
     _request(
         session,
         "PUT",
-        f"/contents/{CONFIG_PATH}",
+        f"/contents/{target_path}",
         json={
-            "message": f"fix: disable demo checkout fault for {ticket_number}",
+            "message": f"fix: {summary[:60]} ({ticket_number})" if patch else f"fix: disable demo checkout fault for {ticket_number}",
             "content": base64.b64encode(safe_content.encode("utf-8")).decode("ascii"),
             "sha": original["sha"],
             "branch": branch,
@@ -150,13 +181,15 @@ def create_repair_pr(ticket_number: str, repair_context: Dict[str, Any], ticket_
         "POST",
         "/pulls",
         json={
-            "title": f"[{ticket_number}] Disable checkout fault injection",
+            "title": f"[{ticket_number}] {summary[:70] if patch else 'Disable checkout fault injection'}",
             "head": branch,
             "base": base,
             "body": (
                 "## Sentinel proposed repair\n\n"
-                "Disable the local demo fault switch and set checkout error rate to zero.\n\n"
-                "This PR is for the isolated localhost demo app only. Review the diff and GitHub Actions checks "
+                f"{summary}\n\n"
+                + (f"Code fix written by Sentinel's FixAgent for `{target_path}`. It passed Sentinel's sandbox checks "
+                   "(safe imports only, public API preserved, supported markets unchanged, failing markets fixed).\n\n" if patch else "")
+                + "This PR is for the isolated localhost demo app only. Review the diff and GitHub Actions checks "
                 f"in Sentinel before approving and merging.\n\nIncident binding: ticket {ticket_number}; "
                 f"service {repair_context['service_name']}; correlation {repair_context['verdict']}; "
                 f"runbook {repair_context.get('runbook_id') or 'unavailable'}.\n\nEvidence references:\n{evidence_lines}\n\n"
@@ -182,9 +215,8 @@ def _find_or_create_incident_issue(session: requests.Session, ticket_number: str
             "title": f"[{ticket_number}] Checkout service incident",
             "body": (
                 f"Sentinel recorded a checkout-service incident as ServiceNow ticket {ticket_number}.\n\n"
-                "Proposed remediation: disable the localhost demo fault switch and set the checkout error rate "
-                "to zero. The linked repair pull request will close this issue only after a human reviews and "
-                f"merges it.\n\n{marker}"
+                "Proposed remediation: see the linked repair pull request. It will close this issue only after "
+                f"a human reviews and merges it.\n\n{marker}"
             ),
         },
     ).json()
@@ -285,7 +317,8 @@ def verify_repair_pr(
     expected_repo = repository_name().casefold()
     base_repo = (pr.get("base", {}).get("repo", {}).get("full_name") or "").casefold()
     head_repo = (pr.get("head", {}).get("repo", {}).get("full_name") or "").casefold()
-    expected_branch = f"sentinel/disable-demo-fault-{ticket_number.lower()}"
+    patch = _patch_of(repair_context)
+    expected_branch = _branch_for(ticket_number, repair_context)
     if base_repo != expected_repo or head_repo != expected_repo:
         raise GithubPullRequestError("The PR base and head must both belong to the configured demo repository.")
     if pr.get("head", {}).get("ref") != expected_branch or f"[{ticket_number}]" not in pr.get("title", ""):
@@ -295,9 +328,14 @@ def verify_repair_pr(
     repo_data = _request(_session(), "GET", "").json()
     if pr.get("base", {}).get("ref") != repo_data.get("default_branch"):
         raise GithubPullRequestError("The PR base must be the configured demo repository's default branch.")
-    if len(files) != 1 or files[0].get("filename") != CONFIG_PATH:
-        raise GithubPullRequestError(f"The PR must change only {CONFIG_PATH}.")
-    if _settings_at_ref(pr["head"]["sha"]) != SAFE_SETTINGS:
+    expected_path = patch["path"] if patch else CONFIG_PATH
+    if len(files) != 1 or files[0].get("filename") != expected_path:
+        raise GithubPullRequestError(f"The PR must change only {expected_path}.")
+    if patch:
+        head_text = file_at_ref(expected_path, pr["head"]["sha"])
+        if hashlib.sha256(head_text.encode("utf-8")).hexdigest() != patch.get("content_sha256"):
+            raise GithubPullRequestError("The PR code does not exactly match the patch Sentinel validated.")
+    elif _settings_at_ref(pr["head"]["sha"]) != SAFE_SETTINGS:
         raise GithubPullRequestError("The PR settings do not exactly match Sentinel's allow-listed repair.")
     issue_number = linked_issue_number(pr)
     if not issue_number:
@@ -351,6 +389,15 @@ def sync_merged_settings(
     checks = get_check_runs(expected_sha)
     if not checks_passed(checks):
         raise GithubPullRequestError("The merged PR's reviewed commit does not have all successful checks.")
+    patch = _patch_of(repair_context)
+    if patch:
+        merged_text = file_at_ref(patch["path"], pr["merge_commit_sha"])
+        if hashlib.sha256(merged_text.encode("utf-8")).hexdigest() != patch.get("content_sha256"):
+            raise GithubPullRequestError("The merged code does not match the patch that received human review.")
+        default_code_path = Path(os.environ.get("SENTINEL_DEMO_APP_CONFIG_PATH", str(DEFAULT_LOCAL_SETTINGS))).parent / Path(patch["path"]).name
+        local_path = Path(os.environ.get("SENTINEL_DEMO_APP_CODE_PATH", str(default_code_path)))
+        _atomic_write(local_path, merged_text)
+        return local_path
     settings = _settings_at_ref(pr["merge_commit_sha"])
     if settings != SAFE_SETTINGS:
         raise GithubPullRequestError("Merged settings do not match Sentinel's reviewed safe repair.")
@@ -358,3 +405,11 @@ def sync_merged_settings(
     local_path.parent.mkdir(parents=True, exist_ok=True)
     local_path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
     return local_path
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    """Replace the file in one step so the running app never reads a half-written module."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(text, encoding="utf-8")
+    os.replace(temporary, path)

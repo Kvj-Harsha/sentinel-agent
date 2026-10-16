@@ -4,7 +4,8 @@ Every command that changes something (GitHub, the checkout app, load) refuses to
 will do first. Reads (preflight, status) are always safe.
 
     python scripts/live_demo.py preflight
-    python scripts/live_demo.py prepare --yes    # stage the demo ONCE: re-arm the fault switch + record a fresh deployment
+    python scripts/live_demo.py prepare --yes    # stage the demo ONCE: buggy v2.14.0 code back in the app + a fresh deployment
+    python scripts/live_demo.py reset-repo --yes # rehearsals only: put the buggy code back on GitHub main after a merged fix
     # ...then press "Inject checkout fault" in the checkout app (http://localhost:8000). That is the only trigger:
     # the app generates its own shopper traffic, Prometheus fires the alert, and Sentinel investigates by itself.
     python scripts/live_demo.py deploy --yes     # 1. record a real GitHub Deployment (the "cause" Sentinel must find)
@@ -120,19 +121,46 @@ def cmd_deploy(args: argparse.Namespace) -> int:
     return 0
 
 
+def _buggy_pricing() -> bytes:
+    return (DEMO_APP_DIR / "scenario" / "pricing_v2_14_0.py").read_bytes()
+
+
 def cmd_prepare(args: argparse.Namespace) -> int:
-    _need_yes(args, "re-enable the fault switch in the shared settings volume, clear any running fault, and "
-                    f"record a fresh GitHub Deployment on {OWNER}/{REPO}")
-    subprocess.run(
-        ["docker", "run", "--rm", "-v", "checkout-demo-settings:/config", "alpine", "sh", "-c",
-         "printf '{\n  \"demo_faults_enabled\": true,\n  \"checkout_error_rate\": 0.0\n}\n' > /config/settings.json"
-         " && chown -R 10001:10001 /config && chmod 644 /config/settings.json"],
-        check=True,
-    )
+    _need_yes(args, "put the app back on the buggy v2.14.0 pricing code and re-arm the demo (shared volume only), clear "
+                    f"any running traffic, and record a fresh GitHub Deployment on {OWNER}/{REPO}")
+    # Both files go into the shared volume through stdin: Docker Desktop bind mounts fail on some hosts.
+    subprocess.run(["docker", "run", "--rm", "-i", "-v", "checkout-demo-settings:/config", "alpine", "sh", "-c",
+                    "cat > /config/pricing.py"], input=_buggy_pricing(), check=True)
+    subprocess.run(["docker", "run", "--rm", "-v", "checkout-demo-settings:/config", "alpine", "sh", "-c",
+                    "printf '{\n  \"demo_faults_enabled\": true,\n  \"checkout_error_rate\": 0.0\n}\n' > /config/settings.json"
+                    " && chown -R 10001:10001 /config && chmod 644 /config/settings.json /config/pricing.py"], check=True)
     print(requests.post(f"{APP_URL}/demo/recover", timeout=5).json())
     code = cmd_deploy(args)
-    print("Ready. Now press 'Inject checkout fault' at", APP_URL, "- nothing else is needed.")
+    print("Ready. Now press 'Start incident' at", APP_URL, "- nothing else is needed.")
     return code
+
+
+def cmd_reset_repo(args: argparse.Namespace) -> int:
+    """Rehearsals: after a fix PR was merged, put the buggy v2.14.0 pricing back on the repository's main branch."""
+    token = os.environ.get("SENTINEL_GITHUB_TOKEN")
+    if not (token and OWNER and REPO):
+        raise SystemExit("Set SENTINEL_GITHUB_TOKEN, SENTINEL_DEMO_GITHUB_OWNER and SENTINEL_DEMO_GITHUB_REPO in .env.")
+    _need_yes(args, f"commit the buggy v2.14.0 app/pricing.py to the default branch of {OWNER}/{REPO} (demo rehearsal reset)")
+    import base64  # pylint: disable=import-outside-toplevel
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
+    base = f"https://api.github.com/repos/{OWNER}/{REPO}"
+    branch = requests.get(base, headers=headers, timeout=10).json().get("default_branch", "main")
+    current = requests.get(f"{base}/contents/app/pricing.py", headers=headers, params={"ref": branch}, timeout=10).json()
+    buggy = _buggy_pricing()
+    if base64.b64decode(current.get("content", "")) == buggy:
+        print("Repository already has the buggy v2.14.0 pricing; nothing to reset.")
+        return 0
+    response = requests.put(f"{base}/contents/app/pricing.py", headers=headers, timeout=10, json={
+        "message": "Reset demo scenario: restore v2.14.0 pricing (rehearsal)", "branch": branch,
+        "content": base64.b64encode(buggy).decode("ascii"), "sha": current.get("sha")})
+    response.raise_for_status()
+    print("Repository reset to the buggy v2.14.0 pricing on", branch)
+    return 0
 
 
 def cmd_fault(args: argparse.Namespace) -> int:
@@ -167,10 +195,10 @@ def cmd_status(_args: argparse.Namespace) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=["preflight", "prepare", "deploy", "fault", "load", "status", "reset"])
+    parser.add_argument("command", choices=["preflight", "prepare", "reset-repo", "deploy", "fault", "load", "status", "reset"])
     parser.add_argument("--yes", action="store_true", help="confirm a command that changes something")
     args = parser.parse_args()
-    return {"preflight": cmd_preflight, "prepare": cmd_prepare, "deploy": cmd_deploy, "fault": cmd_fault, "load": cmd_load,
+    return {"preflight": cmd_preflight, "prepare": cmd_prepare, "reset-repo": cmd_reset_repo, "deploy": cmd_deploy, "fault": cmd_fault, "load": cmd_load,
             "status": cmd_status, "reset": cmd_reset}[args.command](args)
 
 

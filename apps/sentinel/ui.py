@@ -331,7 +331,7 @@ def _finalize_merged_pr(ticket: Dict[str, Any], pr_number: int, expected_sha: st
     )
     app_url = os.environ.get("SENTINEL_DEMO_APP_URL", "http://127.0.0.1:8000").rstrip("/")
     requests.post(f"{app_url}/demo/recover", timeout=5).raise_for_status()
-    recovery = requests.post(f"{app_url}/checkout", json={"order_id": "sentinel-recovery-check"}, timeout=5)
+    recovery = requests.post(f"{app_url}/checkout", json={"order_id": "sentinel-recovery-check", "country": "IN", "subtotal": 49.9}, timeout=5)
     recovery.raise_for_status()
     note = (
         f"[Human approval] GitHub PR #{pr_number} merged after all Actions checks passed. "
@@ -370,7 +370,11 @@ def render_human_approval(ticket: Optional[Dict[str, Any]], instance_key: str = 
         pr_state_key = f"sentinel_pr_{ticket['number']}"
         pr_number = st.session_state.get(pr_state_key) or ticket.get("repair_pr_number")
         if not pr_number:
-            st.markdown("**Proposed change:** disable the injected checkout fault in `app/settings.json`.")
+            patch = repair_context.get("patch")
+            if patch:
+                st.markdown(f"**Proposed change:** {patch.get('summary')} (`{patch.get('path')}`, written by the FixAgent and verified in a sandbox).")
+            else:
+                st.markdown("**Proposed change:** disable the injected checkout fault in `app/settings.json`.")
             st.caption(f"Repository: {github_pr_client.repository_name()} · app: localhost demo only")
             if st.button("Prepare repair PR", type="primary", key=f"create_pr_{instance_key}_{ticket['number']}"):
                 try:

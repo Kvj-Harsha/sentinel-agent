@@ -1,6 +1,8 @@
 """Trusted incident facts (alert time, environment) taken from the alert text by code, never from an LLM's retelling."""
 
 import re
+
+from coded_tools.sentinel.schemas import redact_text
 from typing import Any
 from typing import Dict
 from typing import Optional
@@ -24,6 +26,8 @@ def seed_incident_context(text: str, sly_data: Dict[str, Any]) -> Dict[str, Any]
     context = {
         "starts_at": labelled.group(1) if labelled else (anywhere.group(0) if anywhere else None),
         "environment": environment.group(1).lower() if environment else None,
+        # Redacted alert wording, so runbook search sees the real symptoms even if an agent paraphrases them away.
+        "symptoms": redact_text((text or "")[:400]) if (labelled or anywhere) else None,
     }
     if context["starts_at"] or context["environment"]:
         sly_data[CONTEXT_KEY] = context

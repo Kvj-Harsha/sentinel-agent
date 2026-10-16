@@ -74,6 +74,9 @@ class RunbookSearch(CodedTool):
         :return: a dict with the ranked runbook matches (best first), or an error string.
         """
         query: str = (args.get("query") or "").strip().lower()
+        symptoms = str((sly_data.get("sentinel_incident") or {}).get("symptoms") or "").strip().lower()
+        if symptoms:
+            query = f"{query} {symptoms}".strip()
         if not query:
             return unavailable_result("fixture:runbooks.json", "Please provide an incident query to search runbooks for.")
 

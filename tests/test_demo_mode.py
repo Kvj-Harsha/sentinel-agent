@@ -124,7 +124,9 @@ def test_alert_time_comes_from_the_alert_not_from_the_model(monkeypatch):
         "[Triggered] High 5xx. Affected service: checkout-service. Environment: demo. (host: x, alert fired at 2026-10-16T14:47:09.502Z)",
         sly_data,
     )
-    assert sly_data["sentinel_incident"] == {"starts_at": "2026-10-16T14:47:09.502Z", "environment": "demo"}
+    context = sly_data["sentinel_incident"]
+    assert (context["starts_at"], context["environment"]) == ("2026-10-16T14:47:09.502Z", "demo")
+    assert "checkout-service" in context["symptoms"]
 
     seen = {}
 
@@ -141,3 +143,11 @@ def test_alert_time_comes_from_the_alert_not_from_the_model(monkeypatch):
     from datetime import datetime, timezone  # pylint: disable=import-outside-toplevel
     expected = datetime(2026, 10, 16, 14, 42, 9, 502000, tzinfo=timezone.utc)
     assert seen["start"] == int(expected.timestamp() * 1_000_000_000)
+
+
+def test_runbook_query_includes_the_alert_symptoms(monkeypatch):
+    """A vague agent query still finds the runbook because the alert's own wording is added by code."""
+    monkeypatch.setenv("SENTINEL_MODE", "demo")
+    sly_data = {"sentinel_incident": {"symptoms": "High 5xx rate on checkout-service NullPointerException tax library deploy"}}
+    result = RunbookSearch().invoke({"query": "checkout error"}, sly_data)
+    assert result["matches"], "alert symptoms should be merged into the runbook query"

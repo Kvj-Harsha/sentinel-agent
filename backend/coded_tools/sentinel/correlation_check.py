@@ -3,39 +3,28 @@ Coded tool implementing the evaluation loop: verifies that a proposed root-cause
 hypothesis is actually supported by both the logs evidence and the deploy-timeline
 evidence, before the Scribe agent is allowed to present it with confidence.
 
-Deliberately self-contained: it re-derives the incident and deploy timestamps itself
-from the same synthetic datasets LogsAgent/DeployHistoryAgent query, rather than trusting
-timestamp strings relayed through several LLM-to-LLM hops. In testing, a small model would
-occasionally paraphrase or invent a slightly-wrong timestamp by the time it reached this
-tool several hops downstream of LogsAgent/DeployHistoryAgent -- re-deriving from source
-data makes the evaluation loop's verdict correct regardless of what the agents say to
-each other in natural language.
+It re-derives the incident timestamp from normalized evidence published by the deterministic
+LogsAgent tool, and the deploy timestamp from the deploy source, rather than trusting timestamp
+strings relayed through several LLM-to-LLM hops. A small model can paraphrase or invent a time;
+using the tool-published source records keeps the evaluation loop independent of agent prose.
 """
 
-import json
 import logging
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 from typing import Dict
-from typing import List
 from typing import Union
 
 from neuro_san.interfaces.coded_tool import CodedTool
 
 from coded_tools.sentinel.service_names import canonical_service_name
 
-from coded_tools.sentinel.logs_lookup import LogsLookup
 from coded_tools.sentinel.ticket_notes import add_note
+from coded_tools.sentinel.schemas import redact_text
 
 from coded_tools.sentinel.verified_facts import publish
 
 logger = logging.getLogger(__name__)
-
-LOGS_FILE = Path(__file__).parent / "data" / "logs.json"
-DEPLOYS_FILE = Path(__file__).parent / "data" / "deploys.json"
-
-ANOMALY_LEVELS = {"ERROR", "WARN"}
 
 # A deploy occurring more than this many minutes before the first anomaly is
 # considered too distant in time to be confidently implicated as the cause.
@@ -46,23 +35,76 @@ def _parse(ts: str) -> datetime:
     return datetime.fromisoformat(ts.replace("Z", "+00:00"))
 
 
-def _earliest_anomaly(service_name: str) -> Dict[str, Any]:
-    entries: List[Dict[str, Any]] = json.loads(LOGS_FILE.read_text(encoding="utf-8"))
+def _earliest_anomaly(service_name: str, sly_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Use timestamps published by the deterministic log tool, never LLM-relayed prose."""
+    evidence = (sly_data.get("sentinel_verified") or {}).get("evidence") or []
     anomalies = [
-        e
-        for e in entries
-        if service_name in e["service"].lower()
-        and (e.get("level") in ANOMALY_LEVELS or e.get("status_code", 0) >= 400)
+        record for record in evidence
+        if record.get("evidence_type") == "log"
+        and str(record.get("service_name") or "").lower() == service_name
+        and record.get("event_time")
+        and record.get("source_status") in {"live", "fixture"}
     ]
-    anomalies.sort(key=lambda e: e["timestamp"])
-    return anomalies[0] if anomalies else None
+    anomalies.sort(key=lambda record: record["event_time"])
+    if not anomalies:
+        return None
+    first = anomalies[0]
+    fields = first.get("safe_fields") or {}
+    labels = fields.get("labels") or {}
+    return {
+        "timestamp": first["event_time"],
+        "source": first.get("source", "unknown"),
+        "source_status": first.get("source_status", "unknown"),
+        "environment": fields.get("environment") or labels.get("environment"),
+    }
 
 
-def _most_recent_deploy(service_name: str) -> Dict[str, Any]:
-    entries: List[Dict[str, Any]] = json.loads(DEPLOYS_FILE.read_text(encoding="utf-8"))
-    deploys = [e for e in entries if service_name in e["service"].lower()]
-    deploys.sort(key=lambda e: e["deployed_at"], reverse=True)
-    return deploys[0] if deploys else None
+def _most_recent_deploy(service_name: str, environment: str, sly_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Select a successful deployment from source-published evidence, never fixture files directly."""
+    verified = sly_data.get("sentinel_verified") or {}
+    evidence = verified.get("evidence") or []
+    lookup = verified.get("deployment_lookup") or {}
+    explicit_live_source = lookup.get("source") == "github:deployments"
+    candidates = []
+    for record in evidence:
+        if str(record.get("service_name") or "").lower() != service_name:
+            continue
+        fields = record.get("safe_fields") or {}
+        status = str(record.get("source_status") or "")
+        evidence_type = record.get("evidence_type")
+        if status == "live":
+            if evidence_type != "deployment" or str(fields.get("state") or "").lower() != "success":
+                continue
+            deploy_environment = str(fields.get("environment") or "")
+            if not environment or deploy_environment.casefold() != environment.casefold():
+                continue
+        elif status == "fixture":
+            if explicit_live_source:
+                continue
+            if evidence_type != "deployment_change":
+                continue
+            deploy_environment = str(fields.get("environment") or "")
+            if environment and deploy_environment and deploy_environment.casefold() != environment.casefold():
+                continue
+        else:
+            continue
+        if record.get("event_time"):
+            candidates.append(record)
+    candidates.sort(key=lambda record: record["event_time"], reverse=True)
+    if not candidates:
+        return None
+    selected = candidates[0]
+    fields = selected.get("safe_fields") or {}
+    return {
+        "deployed_at": selected["event_time"],
+        "version": fields.get("commit_sha") or fields.get("version"),
+        "service": selected.get("service_name"),
+        "environment": fields.get("environment"),
+        "source": selected.get("source"),
+        "source_status": selected.get("source_status"),
+        "source_url": selected.get("source_url"),
+        "state": fields.get("state") or "fixture",
+    }
 
 
 class CorrelationCheck(CodedTool):
@@ -87,23 +129,39 @@ class CorrelationCheck(CodedTool):
         """
         raw_service_name: str = (args.get("service_name") or "").strip().lower()
         service_name: str = canonical_service_name(raw_service_name)
-        hypothesis: str = (args.get("hypothesis") or "").strip()
+        hypothesis: str = redact_text((args.get("hypothesis") or "").strip())
 
         missing = [name for name, val in (("service_name", service_name), ("hypothesis", hypothesis)) if not val]
         if missing:
             return f"Error: Missing required argument(s): {', '.join(missing)}."
 
-        anomaly = _earliest_anomaly(service_name)
-        deploy = _most_recent_deploy(service_name)
+        anomaly = _earliest_anomaly(service_name, sly_data)
+        deploy = _most_recent_deploy(service_name, anomaly.get("environment") if anomaly else "", sly_data)
+        lookup = (sly_data.get("sentinel_verified") or {}).get("deployment_lookup") or {}
 
         if anomaly is None or deploy is None:
-            return {
+            if deploy is None and lookup.get("service_name") == service_name:
+                lookup_status = lookup.get("source_status", "unknown")
+                lookup_env = lookup.get("environment")
+                if lookup_status == "live" and int(lookup.get("record_count", 0) or 0) == 0:
+                    reason = f"GitHub returned no deployment records for '{service_name}' in '{lookup_env}'"
+                elif lookup_status == "live":
+                    reason = f"No successful deployment in '{lookup_env}' matches the incident environment and service"
+                else:
+                    reason = f"Deployment evidence from {lookup.get('source', 'the configured source')} is unavailable"
+            else:
+                lookup_status = "unknown"
+                reason = "Could not find both an anomalous log entry and a successful deployment record"
+            result = {
                 "verdict": "NOT_SUPPORTED",
-                "reasoning": (
-                    f"Could not find both an anomalous log entry and a deploy record for "
-                    f"service '{service_name}' -- insufficient data to support any hypothesis."
-                ),
+                "insufficient_evidence": True,
+                "deployment_source_status": lookup_status,
+                "reasoning": f"{reason} for service '{service_name}'; insufficient data to support a root-cause hypothesis.",
+                "service_name": service_name,
+                "hypothesis": hypothesis,
             }
+            publish(sly_data, "correlation", result)
+            return result
 
         incident_time, deploy_time = anomaly["timestamp"], deploy["deployed_at"]
         incident_dt, deploy_dt = _parse(incident_time), _parse(deploy_time)
@@ -142,6 +200,12 @@ class CorrelationCheck(CodedTool):
             "delta_minutes": round(delta_minutes, 1),
             "incident_time": incident_time,
             "deploy_time": deploy_time,
+            "environment": deploy.get("environment") or anomaly.get("environment"),
+            "incident_source": anomaly["source"],
+            "incident_source_status": anomaly["source_status"],
+            "deployment_source": deploy.get("source"),
+            "deployment_source_status": deploy.get("source_status"),
+            "deployment_url": deploy.get("source_url"),
             "reasoning": reasoning,
         }
         previous = (sly_data.get("sentinel_verified") or {}).get("correlation") or {}
@@ -149,9 +213,6 @@ class CorrelationCheck(CodedTool):
         if not keep_previous:
             publish(sly_data, "correlation", {**result, "service_name": service_name, "hypothesis": hypothesis})
         if not keep_previous:
-            # The model may skip the LogsAgent; the evidence a root cause rests on must still be on the ticket
-            # (the note is posted once per service, so this is a no-op if logs_lookup already posted it).
-            LogsLookup().invoke({"service_name": service_name}, sly_data)
             add_note(sly_data, f"[Root cause] Correlation check {verdict}: {reasoning}",
                      once_key=f"correlation:{service_name}:{verdict}")
         return result

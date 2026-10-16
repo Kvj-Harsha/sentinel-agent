@@ -1,0 +1,14 @@
+services:
+  loki:
+    image: sentinel-loki:3.7.7
+    build:
+      context: ./ops/loki
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    ports:
+      - "127.0.0.1:3100:3100"
+    volumes:
+      - loki-data:/loki
+    restart: unless-stopped
+
+volumes:
+  loki-data:

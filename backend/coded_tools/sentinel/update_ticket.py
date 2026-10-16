@@ -13,6 +13,7 @@ from neuro_san.interfaces.coded_tool import CodedTool
 from coded_tools.sentinel import servicenow_client
 from coded_tools.sentinel.open_ticket import TICKET_NUMBER_KEY
 from coded_tools.sentinel.remediation_pipeline import plan_exists
+from coded_tools.sentinel.schemas import redact_text
 from coded_tools.sentinel.ticket_store import TicketStore
 from coded_tools.sentinel.verified_facts import VERIFIED_KEY
 
@@ -21,9 +22,9 @@ logger = logging.getLogger(__name__)
 
 class UpdateTicket(CodedTool):
     """
-    Updates an existing synthetic ServiceNow-style ticket with a new work note and,
+    Updates an existing local ServiceNow-style ticket with a new work note and,
     optionally, a new state. Planned remediations remain In Progress until the HILT flow
-    verifies a human-approved PR merge and app recovery. Updates the local JSON store and, for a
+    verifies a human-approved PR merge and app recovery. Updates the local SQLite store by default and, for a
     ticket that was created on a real ServiceNow instance, PATCHes that incident too (work note,
     and Resolved state with close code/notes).
     """
@@ -72,7 +73,7 @@ class UpdateTicket(CodedTool):
         elif state == "Resolved":
             state = ""
 
-        work_note = self._verified_note(verified, state)
+        work_note = redact_text(self._verified_note(verified, state))
         if any(note.endswith(work_note) for note in existing.get("work_notes", [])) and not state:
             return {
                 "number": number,
@@ -88,14 +89,24 @@ class UpdateTicket(CodedTool):
         if state:
             changes["state"] = state
 
-        self._sync_to_servicenow(existing, changes, work_note, state)
+        remote_sync_ok = self._sync_to_servicenow(existing, changes, work_note, state)
+        resolution_blocked = state == "Resolved" and existing.get("servicenow_sys_id") and servicenow_client.is_configured() and not remote_sync_ok
+        if resolution_blocked:
+            changes.pop("state", None)
+            state = ""
+            changes["append_work_notes"][0] = f"{now}: {self._verified_note(verified, '')}"
         updated = self.store.update(number, changes)
         logger.debug("UpdateTicket updated %s (state=%r)", number, updated.get("state") if updated else None)
 
         return {
             "number": number,
             "state": updated["state"],
-            "summary": f"Updated ticket {number}; state is {updated['state']}.",
+            "summary": (
+                f"Updated ticket {number}; state is {updated['state']}."
+                if not resolution_blocked
+                else f"Updated ticket {number}, but ServiceNow did not confirm resolution; state remains {updated['state']}."
+            ),
+            "resolution_blocked": bool(resolution_blocked),
         }
 
     @staticmethod
@@ -128,17 +139,28 @@ class UpdateTicket(CodedTool):
         suffix = " Incident resolved; closing." if state == "Resolved" else ""
         return f"{prefix} {'; '.join(parts)}.{suffix}"
 
-    @staticmethod
-    def _sync_to_servicenow(existing: Dict[str, Any], changes: Dict[str, Any], work_note: str, state: str) -> None:
+    def _sync_to_servicenow(self, existing: Dict[str, Any], changes: Dict[str, Any], work_note: str, state: str) -> bool:
         """Mirrors the update onto the real ServiceNow incident, if this ticket has one."""
         sys_id = existing.get("servicenow_sys_id")
         if not sys_id or not servicenow_client.is_configured():
-            return
+            return True
         try:
             servicenow_client.update_incident(sys_id, work_note, resolve=state == "Resolved")
+            self.store.append_audit_event(
+                "connector.servicenow.update", "ticket", existing["number"],
+                fingerprint=existing.get("alert_fingerprint"), session_id=existing.get("session_id"),
+                details={"connector": "servicenow", "outcome": "success", "to_state": "Resolved" if state == "Resolved" else existing.get("state")},
+            )
+            return True
         except servicenow_client.ServiceNowError as exc:
             logger.warning("ServiceNow update failed, local ticket still updated: %s", exc)
             changes["append_work_notes"].append(f"ServiceNow sync failed: {exc}")
+            self.store.append_audit_event(
+                "connector.servicenow.update", "ticket", existing["number"],
+                fingerprint=existing.get("alert_fingerprint"), session_id=existing.get("session_id"),
+                details={"connector": "servicenow", "outcome": "failure", "to_state": "Resolved" if state == "Resolved" else existing.get("state")},
+            )
+            return False
 
     async def async_invoke(self, args: Dict[str, Any], sly_data: Dict[str, Any]) -> Union[Dict[str, Any], str]:
         """Delegates to the synchronous invoke method because it's quick, non-blocking."""

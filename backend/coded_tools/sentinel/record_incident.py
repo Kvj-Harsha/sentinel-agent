@@ -12,6 +12,7 @@ from typing import Union
 from neuro_san.interfaces.coded_tool import CodedTool
 
 from coded_tools.sentinel.service_names import canonical_service_name
+from coded_tools.sentinel.schemas import redact_text
 
 from coded_tools.sentinel.incident_memory_store import IncidentMemoryStore
 
@@ -54,9 +55,9 @@ class RecordIncident(CodedTool):
         :return: a dict confirming the record was stored, or an error string.
         """
         service_name: str = canonical_service_name(args.get("service_name") or "")
-        hypothesis: str = (args.get("hypothesis") or "").strip()
+        hypothesis: str = redact_text((args.get("hypothesis") or "").strip())
         verdict: str = (args.get("verdict") or "").strip()
-        summary: str = (args.get("summary") or "").strip()
+        summary: str = redact_text((args.get("summary") or "").strip())
         runbook_id = args.get("runbook_id") or None
 
         missing = [
@@ -89,6 +90,8 @@ class RecordIncident(CodedTool):
 
         record = {
             "session_id": session_id,
+            "ticket_number": sly_data.get("sentinel_ticket_number"),
+            "alert_fingerprint": sly_data.get("alert_fingerprint") or sly_data.get("fingerprint"),
             "service_name": service_name,
             "hypothesis": hypothesis,
             "verdict": verdict,
@@ -96,7 +99,13 @@ class RecordIncident(CodedTool):
             "summary": summary,
             "recorded_at": datetime.now(timezone.utc).isoformat(),
         }
-        total_for_service = self.store.append(record)
+        stored, total_for_service = self.store.append_if_new(record)
+        if not stored:
+            return {
+                "stored": False,
+                "total_incidents_for_service": total_for_service,
+                "summary": f"Already recorded for this incident ({total_for_service} on record for '{service_name}'); not duplicating.",
+            }
         logger.debug("RecordIncident stored record for %r (total now %d)", service_name, total_for_service)
 
         return {

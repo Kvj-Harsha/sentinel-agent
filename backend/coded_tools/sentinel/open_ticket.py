@@ -1,6 +1,7 @@
 """Coded tool that opens a new synthetic ServiceNow-style incident ticket."""
 
 import logging
+import uuid
 from datetime import datetime
 from datetime import timezone
 from typing import Any
@@ -13,6 +14,7 @@ from neuro_san.interfaces.coded_tool import CodedTool
 from coded_tools.sentinel.service_names import canonical_service_name
 
 from coded_tools.sentinel import servicenow_client
+from coded_tools.sentinel.schemas import redact_text
 from coded_tools.sentinel.ticket_store import TicketStore
 
 logger = logging.getLogger(__name__)
@@ -27,9 +29,9 @@ class OpenTicket(CodedTool):
     """
     Opens a new incident ticket shaped like a real ServiceNow Incident table row (number,
     short_description, state, priority, assigned_to, work_notes, caller_id, timestamps).
-    Always recorded in the local JSON store (backend/coded_tools/sentinel/data/tickets.json). When
-    SERVICENOW_INSTANCE / SERVICENOW_USER / SERVICENOW_PASSWORD are set, the incident is ALSO created on
-    that real ServiceNow instance through the Table API, and the real INC number replaces the synthetic one.
+    Always recorded in the local SQLite store by default (or JSON when explicitly selected). When
+    ServiceNow is enabled and credentials are set, the incident is ALSO created on that instance through
+    the Table API, and the real INC number replaces the synthetic one.
     If the instance is unreachable the ticket stays local and the failure is noted on it.
 
     Idempotent per conversation via sly_data (the same pattern record_incident uses for its
@@ -73,8 +75,22 @@ class OpenTicket(CodedTool):
                     "summary": f"Ticket {existing['number']} was already opened for this incident; not duplicating.",
                 }
 
+        fingerprint = str(sly_data.get("alert_fingerprint") or sly_data.get("fingerprint") or "").strip()
+        if fingerprint:
+            existing = self.store.find_by_fingerprint(fingerprint)
+            if existing is not None:
+                sly_data[TICKET_NUMBER_KEY] = existing["number"]
+                sly_data.setdefault("incident_session_id", existing.get("session_id"))
+                return {
+                    "number": existing["number"],
+                    "state": existing["state"],
+                    "priority": existing["priority"],
+                    "assigned_to": existing["assigned_to"],
+                    "summary": f"Ticket {existing['number']} already exists for this alert fingerprint; not duplicating.",
+                }
+
         service_name: str = canonical_service_name(args.get("service_name") or "")
-        short_description: str = (args.get("short_description") or "").strip()
+        short_description: str = redact_text((args.get("short_description") or "").strip())
         priority: str = (args.get("priority") or "2 - High").strip()
 
         missing = [
@@ -86,9 +102,13 @@ class OpenTicket(CodedTool):
             return f"Error: Missing required argument(s): {', '.join(missing)}."
 
         now = datetime.now(timezone.utc).isoformat()
+        session_id = sly_data.get("incident_session_id") or str(uuid.uuid4())
+        sly_data["incident_session_id"] = session_id
         ticket = {
             "number": self.store.next_number(),
             "service_name": service_name,
+            "alert_fingerprint": fingerprint or None,
+            "session_id": session_id,
             "short_description": short_description,
             "state": "In Progress",
             "priority": priority,
@@ -100,8 +120,14 @@ class OpenTicket(CodedTool):
             "sys_updated_on": now,
         }
         self._mirror_to_servicenow(ticket, priority)
-        self.store.append(ticket)
+        ticket = self.store.append(ticket)
         sly_data[TICKET_NUMBER_KEY] = ticket["number"]
+        if servicenow_client.is_configured():
+            self.store.append_audit_event(
+                "connector.servicenow.create", "ticket", ticket["number"],
+                fingerprint=fingerprint or None, session_id=session_id,
+                details={"connector": "servicenow", "outcome": "success" if ticket.get("servicenow_sys_id") else "failure"},
+            )
         logger.debug("OpenTicket created %s for service=%r", ticket["number"], service_name)
 
         return {

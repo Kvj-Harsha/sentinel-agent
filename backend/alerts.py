@@ -17,6 +17,9 @@ from typing import Any
 from typing import Dict
 from typing import List
 
+from coded_tools.sentinel.schemas import Incident
+from coded_tools.sentinel.schemas import dump_model
+
 SAMPLE_ALERTS_DIR = Path(__file__).resolve().parent / "sample_alerts"
 
 
@@ -44,15 +47,32 @@ def compose_incident_report(alert: Dict[str, Any]) -> str:
         and "date".
     :return: a single incident-report string ready to send to the IncidentCommander agent.
     """
-    service_tags = [tag.split(":", 1)[1] for tag in alert.get("tags", []) if tag.startswith("service:")]
-    if not service_tags:
-        raise ValueError("Alert payload is missing a 'service:<name>' tag; cannot identify the affected service.")
+    normalized = alert.get("normalized_incident")
+    if normalized:
+        incident = Incident.model_validate(normalized)
+    else:
+        service_tags = [tag.split(":", 1)[1] for tag in alert.get("tags", []) if tag.startswith("service:")]
+        if not service_tags:
+            raise ValueError("Alert payload is missing a 'service:<name>' tag; cannot identify the affected service.")
+        incident = Incident(
+            incident_id=alert.get("incident_id"),
+            fingerprint=alert.get("fingerprint"),
+            service_name=service_tags[0],
+            environment=next((tag.split(":", 1)[1] for tag in alert.get("tags", []) if tag.startswith("env:")), None),
+            title=alert.get("title") or "Alert",
+            description=alert.get("body") or "",
+            source=alert.get("source") or "unknown",
+            fired_at=alert.get("date") if alert.get("date") not in (None, "", "unknown time") else None,
+            host=alert.get("host"),
+        )
 
+    environment = f" Environment: {incident.environment}." if incident.environment else ""
     return (
-        f"{alert.get('title', '').strip()} "
-        f"Affected service: {service_tags[0]}. "
-        f"{alert.get('body', '').strip()} "
-        f"(host: {alert.get('host', 'unknown')}, alert fired at {alert.get('date', 'unknown time')})"
+        f"{incident.title} "
+        f"Affected service: {incident.service_name}."
+        f"{environment} "
+        f"{incident.description.strip()} "
+        f"(host: {incident.host or 'unknown'}, alert fired at {incident.fired_at.isoformat() if incident.fired_at else 'unknown time'})"
     ).strip()
 
 
@@ -84,6 +104,23 @@ def compose_alertmanager_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
     if alert.get("generatorURL"):
         details.append(f"Prometheus expression: {alert['generatorURL']}")
 
+    safe_label_keys = ("alertname", "service", "service_name", "app", "environment", "env", "severity")
+    safe_labels = {key: str(labels[key]) for key in safe_label_keys if labels.get(key) is not None}
+    incident = Incident(
+        incident_id=str(alert.get("fingerprint") or "") or None,
+        fingerprint=str(alert.get("fingerprint") or "") or None,
+        service_name=service_name,
+        environment=str(labels.get("environment") or labels.get("env") or "") or None,
+        severity=str(labels.get("severity") or "") or None,
+        title=title,
+        description=" ".join(details),
+        source="Prometheus Alertmanager",
+        fired_at=alert.get("startsAt") or None,
+        host=str(labels.get("instance") or labels.get("host") or "") or None,
+        labels=safe_labels,
+        source_url=alert.get("generatorURL") or None,
+        source_payload_ref=str(alert.get("fingerprint") or "") or None,
+    )
     return {
         "title": title,
         "body": " ".join(details),
@@ -92,6 +129,7 @@ def compose_alertmanager_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
         "date": alert.get("startsAt") or "unknown time",
         "source": "Prometheus Alertmanager",
         "fingerprint": alert.get("fingerprint", ""),
+        "normalized_incident": dump_model(incident),
     }
 
 

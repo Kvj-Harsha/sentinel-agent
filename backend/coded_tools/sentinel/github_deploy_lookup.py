@@ -12,6 +12,14 @@ from typing import Union
 import requests
 from neuro_san.interfaces.coded_tool import CodedTool
 
+from coded_tools.sentinel.schemas import EvidenceRecord
+from coded_tools.sentinel.schemas import SourceStatus
+from coded_tools.sentinel.schemas import dump_model
+from coded_tools.sentinel.schemas import sanitize_record
+from coded_tools.sentinel.schemas import unavailable_result
+from coded_tools.sentinel.schemas import utc_now
+from coded_tools.sentinel.verified_facts import publish_evidence
+
 logger = logging.getLogger(__name__)
 
 CACHE_FILE = Path(__file__).parent / "data" / "github_deploys_cache.json"
@@ -52,23 +60,40 @@ class GithubDeployLookup(CodedTool):
         """
         service_name: str = (args.get("service_name") or "").strip().lower()
         if not service_name:
-            return "Error: Please provide a service_name to look up commit/deploy history for."
+            return unavailable_result("github", "Please provide a service_name to look up commit history for.")
         if service_name != DEMO_SERVICE_NAME:
             return (
                 f"Error: github_deploy_lookup only has data for '{DEMO_SERVICE_NAME}'. "
                 "Use deploy_lookup for every other service."
             )
 
-        matches = self._fetch_live()
+        offline_mode = os.environ.get("SENTINEL_OFFLINE_MODE", "false").strip().lower() in {"1", "true", "yes", "on"}
+        matches = None if offline_mode else self._fetch_live()
+        source_status = SourceStatus.CACHE if offline_mode else SourceStatus.LIVE
         if matches is None:
             matches = self._load_cache()
+            source_status = SourceStatus.CACHE if matches else SourceStatus.UNAVAILABLE
 
         logger.debug("GithubDeployLookup returning %d commit(s) for %r", len(matches), service_name)
         if not matches:
-            return {"matches": [], "summary": f"No commit history available for '{service_name}'."}
+            return {"matches": [], "evidence": [], "source": "github", "source_status": source_status.value,
+                    "summary": f"No commit history available for '{service_name}'."}
 
+        retrieved_at = utc_now()
+        evidence = [dump_model(EvidenceRecord(
+            evidence_type="commit", service_name=DEMO_SERVICE_NAME, source="github:commits",
+            source_status=source_status, query=service_name, record_id=item.get("version"),
+            event_time=item.get("deployed_at"), retrieved_at=retrieved_at,
+            summary=f"Commit {item.get('version')}: {item.get('change_summary', '')}",
+            safe_fields={key: item[key] for key in ("service", "deployed_at", "version", "author", "change_summary") if key in item},
+            source_url=item.get("url"),
+        )) for item in matches]
+        publish_evidence(sly_data, evidence)
         return {
-            "matches": matches,
+            "matches": sanitize_record(matches),
+            "evidence": evidence,
+            "source": "github:commits",
+            "source_status": source_status.value,
             "summary": f"Found {len(matches)} recent commit(s) on GitHub, most recent first.",
         }
 
@@ -81,8 +106,8 @@ class GithubDeployLookup(CodedTool):
         try:
             response = requests.get(url, params={"per_page": PER_PAGE}, timeout=REQUEST_TIMEOUT_SECONDS)
             response.raise_for_status()
-        except requests.exceptions.RequestException as exc:
-            logger.warning("GithubDeployLookup live call failed, falling back to cache: %s", exc)
+        except requests.exceptions.RequestException:
+            logger.warning("GithubDeployLookup live call failed; falling back to local cache.")
             return None
 
         commits = response.json()
@@ -103,8 +128,8 @@ class GithubDeployLookup(CodedTool):
         """:return: the offline cached snapshot, or an empty list if it's unreadable."""
         try:
             return json.loads(CACHE_FILE.read_text(encoding="utf-8"))
-        except OSError as exc:
-            logger.warning("GithubDeployLookup could not read fallback cache: %s", exc)
+        except OSError:
+            logger.warning("GithubDeployLookup could not read fallback cache.")
             return []
 
     async def async_invoke(self, args: Dict[str, Any], sly_data: Dict[str, Any]) -> Union[Dict[str, Any], str]:

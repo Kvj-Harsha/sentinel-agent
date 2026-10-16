@@ -1,6 +1,7 @@
 [
   {
     "service": "checkout-service",
+    "environment": "demo",
     "version": "v2.14.0",
     "deployed_at": "2026-10-12T13:58:00Z",
     "author": "a.kumar",
@@ -8,6 +9,7 @@
   },
   {
     "service": "checkout-service",
+    "environment": "demo",
     "version": "v2.13.4",
     "deployed_at": "2026-10-09T10:00:00Z",
     "author": "s.lee",
@@ -15,6 +17,7 @@
   },
   {
     "service": "auth-service",
+    "environment": "demo",
     "version": "v1.8.2",
     "deployed_at": "2026-10-12T09:00:00Z",
     "author": "r.singh",
@@ -22,6 +25,7 @@
   },
   {
     "service": "inventory-service",
+    "environment": "demo",
     "version": "v3.2.0",
     "deployed_at": "2026-10-08T17:00:00Z",
     "author": "a.kumar",
@@ -29,6 +33,7 @@
   },
   {
     "service": "notification-service",
+    "environment": "demo",
     "version": "v1.1.0",
     "deployed_at": "2026-10-05T12:00:00Z",
     "author": "m.patel",
@@ -36,6 +41,7 @@
   },
   {
     "service": "payments-gateway",
+    "environment": "demo",
     "version": "v4.0.1",
     "deployed_at": "2026-10-13T16:10:00Z",
     "author": "j.nguyen",
@@ -43,6 +49,7 @@
   },
   {
     "service": "search-service",
+    "environment": "demo",
     "version": "v1.9.0",
     "deployed_at": "2026-09-20T09:00:00Z",
     "author": "t.okafor",

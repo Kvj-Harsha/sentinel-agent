@@ -5,11 +5,12 @@
 When a production alert fires, the first critical minutes of an on-call engineer's time go into manual correlation:
 pull the error logs, check what deployed recently, search old runbooks, remember whether this has happened before -
 all while under pressure. **Sentinel** automates the investigation, then keeps a human in control of the repair.
-A team of cooperating AI agents, built on Cognizant's open-source **neuro-san** framework, takes a monitoring alert,
-opens a real ServiceNow incident, gathers evidence, verifies its root-cause hypothesis with a deterministic check,
-and proposes a narrow fix through a real GitHub issue and linked pull request. Streamlit shows the issue, actual diff
-and GitHub Actions checks. A human approves and merges; GitHub closes the linked issue, then Sentinel verifies
-recovery in the isolated demo app and resolves the ServiceNow ticket.
+A team of cooperating AI agents, built on Cognizant's open-source **neuro-san** framework and declared in HOCON,
+takes a monitoring alert and gathers evidence. The current canonical investigation uses synthetic JSON fixtures for
+logs, deploys, runbooks, incident memory and local tickets; its root-cause hypothesis is checked deterministically.
+When configured, Sentinel can mirror the ticket to ServiceNow and create/review a GitHub issue and pull request for
+the isolated checkout demo. A human approves and merges; Sentinel applies only an allow-listed setting to the local
+demo app, verifies recovery, and then resolves the ticket.
 
 ---
 
@@ -25,15 +26,15 @@ recovery in the isolated demo app and resolves the ServiceNow ticket.
 
 ## How It Works
 
-Incidents arrive the way they do in production: as a structured, Datadog-shaped alert (sidebar of the Streamlit app, or
-`python backend/alerts.py`). The incident report is composed from the payload **deterministically, with no LLM**, and handed
-to a network of eight agents declared in one HOCON file:
+Incidents arrive through a Streamlit sample/free-text report or a structured webhook payload. The local Prometheus /
+Alertmanager stack can send a firing alert to Sentinel. `backend/alerts.py` composes the incident report
+**deterministically, with no LLM**, and hands it to a network of eight agents declared in one HOCON file:
 
 - **IncidentCommander** (front man) orchestrates the others at runtime via neuro-san's AAOSA protocol; PII middleware
   redacts accidentally pasted emails and card numbers before any agent or the LLM sees them.
 - **HistorianAgent** is persistent memory: it recalls prior incidents and returns the **known hotfix to reapply**
   (not just "this happened before"), and records the new incident.
-- **TicketAgent** opens one ticket per incident (a **real ServiceNow incident** when credentials are set, with caller,
+- **TicketAgent** opens one local JSON ticket per incident and can mirror it to a **ServiceNow incident** when credentials are set, with caller,
   assignment group and assignee). The ticket stays open while repair awaits human review. Work notes are written from tool-verified facts, never from the
   model's free text (in testing the model invented a "database connectivity" cause).
 - **RemediationAgent** prepares a proposed config patch and local preflight results. On **Prepare repair PR**, Sentinel
@@ -41,8 +42,10 @@ to a network of eight agents declared in one HOCON file:
   real diff and GitHub Actions checks, and waits for a human to approve and merge. GitHub closes the issue on merge.
   The merged settings are applied only to the localhost demo app; its checkout endpoint is then verified before the
   ServiceNow incident is resolved.
-- **LogsAgent / DeployHistoryAgent / RunbookAgent** are independent specialists. Runbooks are Confluence-shaped, and
-  deploy history for this repo comes from the **live GitHub API** (with an offline fallback).
+- **LogsAgent / DeployHistoryAgent / RunbookAgent** are independent specialists. Logs come from bounded local Loki,
+  and checkout-service deployment evidence comes from explicit GitHub Deployment records and statuses. Other service
+  deploy history and Confluence-shaped runbooks remain clearly labeled fixtures. Commit history remains context only;
+  a commit or build run is not proof of deployment.
 - **Scribe** writes the summary - but only after `correlation_check`, a plain-Python tool that **re-derives the
   incident and deploy timestamps from source data itself** and checks that the deploy came shortly *before* the anomaly on
   the *same* service. If it does not line up, the verdict is `NOT_SUPPORTED` and the answer must say so.
@@ -58,9 +61,10 @@ system wrong.
 
 ## Engineering Rigor
 
-- **Evaluation harness:** 13 live scenarios (clean and paraphrased versions of four incident types, a service with no
-  runbook, an unknown service, a PII-leak case) drive the real network through neuro-san's CLI client and are graded on the
-  **tool outputs in the agent trace**, not the LLM's prose. Result: **12/13 pass** (the one miss is an alert that never names a service: the model invents one, and the tools correctly refuse to confirm a cause for it). Plus 27 offline `pytest` tests of the tools.
+- **Recorded evaluation baseline:** the checked-in `eval/_reports/report.md` shows **12/13 scenarios passed** in the
+  last recorded live run, with a miss on `payments-gateway-paraphrase` (expected `SUPPORTED`, actual
+  `NOT_SUPPORTED`). The report grades deterministic tool outputs, not prose. This is a historical report, not a run
+  performed as part of Step 0. The repository also records 27 offline tool tests; they were not rerun in this baseline review.
 - **Bugs the harness and live runs caught (all fixed):** the Scribe garbling timestamps relayed across agent hops
   (so `correlation_check` re-derives them itself); service-name drift (`payment-gateway` vs `payments-gateway`) silently
   breaking an exact-match lookup (now canonicalized in the tool layer, not just warned about in the prompt); a free-text log query that required the whole phrase to match; four duplicate tickets
@@ -82,11 +86,15 @@ system wrong.
 | LLM | OpenAI `gpt-4o-mini` (+ `gpt-4.1-mini` fallback) | Cheap, fast, good tool-calling; any OpenAI-compatible provider works via env vars |
 | Frontend | Streamlit | Chat + alert buttons + ticket panel in ~130 lines |
 | Verification | Deterministic Python tools | Facts that must be right (timing, ticket state, memory) never depend on an LLM's retelling |
-| Data | Synthetic checkout app + real GitHub/ServiceNow APIs | Demo traffic stays local; PR and incident workflow are verifiable |
+| Data | Synthetic checkout app and evidence fixtures; optional GitHub/ServiceNow APIs | Local demo stays reproducible; external ticket/PR paths can be verified when configured |
 
 ---
 
-## Example Interaction
+## Illustrative fixture-backed interaction
+
+The following is a representative local-fixture scenario. A ServiceNow record, GitHub PR, and real Actions checks exist
+only when their respective external integrations are configured; the logs, deploy, and runbook values below are
+synthetic demo evidence.
 
 ```
 Alert fired:  [Triggered] High 5xx rate on checkout-service ... NullPointerException on PaymentValidator.charge()
@@ -122,6 +130,6 @@ Follow-up:    "Which deploy caused this and who authored it?"  ->  v2.14.0 by a.
 - The LLM's final prose can still paraphrase imperfectly (see the wrong-runbook-id bug above); the verified card, not the
   prose, is the source of truth, and the harness grades tool outputs for that reason.
 - GitHub issue/PR creation, diff retrieval, check status and merge require a fine-grained token scoped to the demo app
-  repository with Issues and Pull requests read/write, Contents read/write, and Checks read. The existing public
-  commit-history lookup remains read-only and uses commits as a deploy proxy.
+  repository with Issues and Pull requests read/write, Contents read/write, and Checks read. The deployment lookup is
+  read-only; it uses explicit GitHub Deployment records, while commit history remains context only.
 - Next: live Confluence retrieval, semantic runbook search, multi-tenant memory, tracing dashboards.

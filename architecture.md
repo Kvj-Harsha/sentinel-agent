@@ -4,14 +4,18 @@
 
 Sentinel is an **AI incident-triage assistant** built on Cognizant's **neuro-san** framework. When a production
 alert fires, an on-call engineer normally spends the first critical minutes correlating logs, recent deploys and old
-runbooks by hand. Sentinel does that with a coordinated network of agents: it opens a ticket, gathers the evidence,
-**verifies its root-cause hypothesis with a deterministic check**, and proposes a narrow repair through a real GitHub
-issue and linked pull request. A human reviews the actual diff and GitHub Actions checks in Streamlit. GitHub closes
-the linked issue only when that PR is merged; after local recovery verification Sentinel resolves the linked
-**ServiceNow incident**.
+runbooks by hand. In the current demo, Sentinel runs a coordinated network of agents over live Prometheus metrics,
+local Loki logs, explicit GitHub Deployments for the checkout service, and JSON fixtures for other deploy
+history, runbooks, incident memory, and local tickets. It
+deterministically checks whether tool-published log evidence and deployment data support a cause and can propose a
+narrow repair for the isolated checkout demo app. When the
+corresponding integrations are configured, it can also query explicit deployment records, show commit history as
+context only, create/review a PR in a
+dedicated demo repository, and mirror tickets to a ServiceNow instance. A human reviews the actual diff and GitHub
+Actions checks in Streamlit; only the allow-listed local demo setting is applied after approval and recovery checks.
 
 The system is a **Streamlit web frontend**, a thin **Python backend** that runs the agent network in-process, and a
-**multi-agent network** (eight agents, ten coded tools) declared in one HOCON file.
+**multi-agent network** (eight agents and their coded tools) declared in one HOCON file.
 
 ---
 
@@ -20,7 +24,8 @@ The system is a **Streamlit web frontend**, a thin **Python backend** that runs 
 ![Sentinel agent network architecture](docs/diagrams/architecture.png)
 
 *Step numbers match the order in `IncidentCommander`'s instructions (`backend/registries/sentinel.hocon`). Grey tool
-boxes read small synthetic JSON fixtures; the orange `github_deploy_lookup` calls the real GitHub REST API. Diagram
+boxes read small synthetic JSON fixtures; `github_deployments` reads explicit GitHub Deployment records and status
+events for checkout-service. The legacy `github_deploy_lookup` is commit-history context only. Diagram
 sources (TikZ) are in `docs/diagrams/`; rebuild with `pdflatex architecture.tex && pdftoppm -png -r 200 -singlefile
 architecture.pdf architecture`.*
 
@@ -37,7 +42,7 @@ A **Streamlit** app that:
   Python, no LLM), because a real on-call engineer does not hand-write a precise query during an outage.
 - Keeps `chat_context` **and** `sly_data` in Streamlit session state, so follow-up questions continue the same
   conversation and reuse the same ticket instead of opening a new one.
-- Shows the ServiceNow **ticket link and ownership**, a **"Verified by tools"** card, and a human-review panel with
+- Shows a local ticket or, when configured, the ServiceNow **ticket link and ownership**, a **"Verified by tools"** card, and a human-review panel with
   the GitHub issue link, real PR diff, Actions checks and an explicit approve-and-merge control.
 
 ### 2. Backend - `backend/run.py`
@@ -65,20 +70,20 @@ A **Streamlit** app that:
 | `IncidentCommander` | LLM agent (front man) | Entry point. Decides, at runtime, to consult the others in order. Carries two `PIIMiddleware` guardrails (email, credit card) that redact sensitive data before any agent or the LLM sees it |
 | `RemediationAgent` | LLM agent | After a SUPPORTED root cause, calls `remediation_pipeline` for a proposed patch and local preflight; the GitHub PR and CI are handled by the human-review workflow |
 | `HistorianAgent` | LLM agent | Persistent memory across conversations. Recalls prior incidents and returns a `suggested_hotfix` when the service has recurred; records new incidents |
-| `TicketAgent` | LLM agent | Opens one ticket per incident (real ServiceNow incident if configured); resolution waits for merge and recovery verification |
-| `LogsAgent` | LLM agent | Finds the anomaly and its timestamp (`logs_lookup`) |
-| `DeployHistoryAgent` | LLM agent | Finds recent deploys (`deploy_lookup`, or the live GitHub-backed `github_deploy_lookup` for this repo) |
-| `RunbookAgent` | LLM agent | Finds the best runbook, shaped like a Confluence page (`runbook_search`) |
+| `TicketAgent` | LLM agent | Opens a local ticket and optionally mirrors it to ServiceNow when configured; resolution waits for merge and recovery verification |
+| `LogsAgent` | LLM agent | Finds the anomaly and its timestamp from bounded Loki results (`loki_logs`); fixture fallback is opt-in |
+| `DeployHistoryAgent` | LLM agent | Uses explicit GitHub Deployment records for checkout-service; fixture records for other demo services; commit history remains context only |
+| `RunbookAgent` | LLM agent | Finds a synthetic fixture runbook shaped like a Confluence page (`runbook_search`) |
 | `Scribe` | LLM agent | Writes the summary, but only after calling `correlation_check` |
 
 ### 5. Coded tools - `backend/coded_tools/sentinel/`
 
-Plain Python classes extending neuro-san's `CodedTool`. They are pure, deterministic and unit-tested
-(`tests/test_tools.py`): `logs_lookup`, `deploy_lookup`, `github_deploy_lookup`, `runbook_search`,
+Plain Python classes extending neuro-san's `CodedTool`: `loki_logs`, `prometheus_metrics`, `logs_lookup` (explicit fixture fallback), `deploy_lookup`, `github_deployments`, `github_deploy_lookup` (commit context only), `runbook_search`,
 `correlation_check`, `recall_incidents`, `record_incident`, `open_ticket`, `update_ticket`, `remediation_pipeline`, plus
 helpers: `servicenow_client` (Table API), `ticket_notes`, `service_names` (fuzzy service-name canonicalization),
-`verified_facts` and the JSON-backed `ticket_store` / `incident_memory_store`. `github_deploy_lookup` calls the public GitHub API and falls back to an
-offline cache on any network failure, so a live demo never breaks on connectivity.
+`verified_facts` and the JSON-backed `ticket_store` / `incident_memory_store`. `github_deployments` reads a bounded
+page of explicit deployment records and their latest statuses. It reports live/empty when the configured repository
+and environment have no records; it never substitutes commits or build runs.
 
 ---
 
@@ -124,6 +129,19 @@ production service is performed.
 
 ---
 
+## Current data-source boundaries
+
+| Evidence or action | Source in the current demo | Status |
+|---|---|---|
+| Alert | Streamlit sample or local Prometheus/Alertmanager webhook | Sample is local; Prometheus/Alertmanager is a local running stack that sends an alert. |
+| Metrics investigation | Read-only Prometheus HTTP API | Live for the configured checkout-service error-rate query, with bounded time range and normalized samples. |
+| Logs | Local Grafana Loki via `loki_logs`; Alloy collects checkout container logs | Live and verified; fixture fallback is explicitly opt-in. |
+| Deploys | GitHub Deployments API for checkout-service; `data/deploys.json` for other services | Explicit records/statuses only; no records currently exist in the configured checkout repository/environment. Commit history remains context only. |
+| Runbooks | `data/runbooks.json` | Synthetic Confluence-shaped fixture; no Confluence API call. |
+| Ticket and incident history | JSON stores, optionally mirrored to ServiceNow when configured | Local demo by default; external ServiceNow is optional. |
+| Repair PR/checks | Dedicated demo GitHub repository when configured | Real GitHub API path, but only for the demo repair. |
+| Recovery | Local checkout demo app and allow-listed settings file | Local demo only; no production deployment. |
+
 ## Data Flow
 
 ![Sentinel incident sequence diagram](docs/diagrams/sequence.png)
@@ -135,7 +153,7 @@ User fires an alert (or types an incident) in Streamlit
     -> IncidentCommander (PII middleware redacts input)
         1. HistorianAgent -> recall_incidents      => prior incidents + suggested_hotfix
         2. TicketAgent    -> open_ticket           => INC12000xx (In Progress)
-        3-5. LogsAgent / DeployHistoryAgent / RunbookAgent -> anomaly, deploy, runbook match
+        3-6. LogsAgent / MetricsAgent / DeployHistoryAgent / RunbookAgent -> logs, metrics, deploy, runbook
         6. Scribe -> correlation_check              => SUPPORTED / NOT_SUPPORTED (deterministic)
         7. RemediationAgent -> remediation_pipeline => proposed diff + local preflight only
         8. TicketAgent -> update_ticket             => remains In Progress pending human PR merge

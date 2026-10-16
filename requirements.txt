@@ -1,5 +1,6 @@
 # Agent framework (pulls in langchain, langchain-openai, pyhocon, aiofiles, ... transitively)
 neuro-san==0.7.7
+pydantic>=2.0,<3
 
 # Loads OPENAI_API_KEY (and optional overrides) from a local .env file
 python-dotenv>=1.0.1

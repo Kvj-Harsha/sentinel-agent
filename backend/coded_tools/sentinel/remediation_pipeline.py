@@ -17,6 +17,7 @@ from neuro_san.interfaces.coded_tool import CodedTool
 
 from coded_tools.sentinel import ticket_notes
 from coded_tools.sentinel.service_names import canonical_service_name
+from coded_tools.sentinel.ticket_store import TicketStore
 from coded_tools.sentinel.verified_facts import VERIFIED_KEY
 from coded_tools.sentinel.verified_facts import publish
 
@@ -25,11 +26,18 @@ logger = logging.getLogger(__name__)
 DATA_DIR = Path(__file__).parent / "data"
 DEFAULT_PLAN_FILE = DATA_DIR / "remediation.json"
 MAX_DIFF_LINES_IN_NOTE = 14
+ALLOWED_CONFIG_FILES = {"checkout-service": "configs/checkout-service.yaml"}
+ALLOWED_PATCH_TYPES = {
+    "checkout-service": {
+        "tax.fallback_to_legacy_table": bool,
+        "tax.null_rate_guard": bool,
+    },
+}
 SECRET_PATTERNS = {
     "AWS access key": r"AKIA[0-9A-Z]{16}",
     "private key block": r"-----BEGIN [A-Z ]*PRIVATE KEY-----",
-    "OpenAI-style secret": r"sk-[A-Za-z0-9]{20,}",
-    "hard-coded password": r"(?i)password\s*[:=]\s*\S+",
+    "provider or service token": r"(?i)\b(?:sk-(?:or-v1-)?[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|ATATT[A-Za-z0-9_+/=-]{20,}|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})\b",
+    "hard-coded credential": r"(?i)\b(?:password|passwd|pwd|api[_-]?key|access[_-]?token|client[_-]?secret)\s*[:=]\s*\S+",
 }
 
 
@@ -83,13 +91,30 @@ class RemediationPipeline(CodedTool):
         verdict = ((sly_data.get(VERIFIED_KEY) or {}).get("correlation") or {}).get("verdict")
         if verdict != "SUPPORTED":
             return "Error: Refusing to remediate: the root cause is not verified (correlation_check is not SUPPORTED)."
+        correlation = (sly_data.get(VERIFIED_KEY) or {}).get("correlation") or {}
+        if correlation.get("service_name") != service_name:
+            return "Error: Refusing to remediate: the verified correlation belongs to a different service."
 
         existing = (sly_data.get(VERIFIED_KEY) or {}).get("remediation")
         if existing:
+            self._persist_repair_binding(sly_data, service_name, plans[service_name], existing)
             return {**existing, "summary": "Remediation already ran for this incident; not repeating it."}
 
         plan = plans[service_name]
-        original = yaml.safe_load((DATA_DIR / plan["config_file"]).read_text(encoding="utf-8"))
+        allowed_config = ALLOWED_CONFIG_FILES.get(service_name)
+        if not allowed_config or plan.get("config_file") != allowed_config:
+            return "Error: Refusing to remediate: the configured file is outside the service allow-list."
+        allowed_patches = ALLOWED_PATCH_TYPES.get(service_name, {})
+        for patch in plan.get("patches", []):
+            expected_type = allowed_patches.get(patch.get("path"))
+            if expected_type is None or type(patch.get("value")) is not expected_type:
+                return "Error: Refusing to remediate: the patch path or value is outside the service allow-list."
+        config_path = (DATA_DIR / allowed_config).resolve()
+        if DATA_DIR.resolve() not in config_path.parents:
+            return "Error: Refusing to remediate: the configured file escapes the local data directory."
+        original = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        if not isinstance(original, dict):
+            return "Error: Refusing to remediate: the allow-listed config is not a YAML object."
         patched = _apply_patches(original, plan["patches"])
         patched_text = yaml.safe_dump(patched, sort_keys=False)
         diff = list(
@@ -128,9 +153,70 @@ class RemediationPipeline(CodedTool):
             "all_passed": all_passed,
         }
         publish(sly_data, "remediation", facts)
+        self._persist_repair_binding(sly_data, service_name, plan, facts)
         outcome = "local preflight passed; open a GitHub PR for CI and human review" if all_passed else "preflight FAILED; do not proceed"
         ticket_notes.add_note(sly_data, f"[Remediation proposal] {outcome}.")
         return {**facts, "summary": f"Fix proposed only; {outcome}. No running service was changed."}
+
+    @staticmethod
+    def _persist_repair_binding(
+        sly_data: Dict[str, Any], service_name: str, plan: Dict[str, Any], facts: Dict[str, Any]
+    ) -> None:
+        """Persist a compact incident/evidence binding for the separate approval UI."""
+        ticket_number = sly_data.get("sentinel_ticket_number")
+        session_id = sly_data.get("incident_session_id")
+        if not ticket_number or not session_id:
+            return
+        verified = sly_data.get(VERIFIED_KEY) or {}
+        correlation = verified.get("correlation") or {}
+        evidence = verified.get("evidence") or []
+        refs = []
+        for item in evidence:
+            if (item.get("service_name") or "").casefold() != service_name.casefold():
+                continue
+            if item.get("source_status") not in {"live", "fixture"}:
+                continue
+            if item.get("evidence_type") not in {"log", "deployment", "deployment_change"}:
+                continue
+            record_id = item.get("record_id") or item.get("event_time")
+            if record_id:
+                refs.append({
+                    "source": item.get("source"), "record_id": str(record_id),
+                    "evidence_type": item.get("evidence_type"), "source_status": item.get("source_status"),
+                })
+        refs = list({(item["source"], item["record_id"], item["evidence_type"]): item for item in refs}.values())
+        log_refs = [item for item in refs if item["evidence_type"] == "log"]
+        deploy_refs = [item for item in refs if item["evidence_type"] in {"deployment", "deployment_change"}]
+        binding = {
+            "ticket_number": ticket_number,
+            "session_id": session_id,
+            "service_name": service_name,
+            "verdict": correlation.get("verdict"),
+            "runbook_id": plan.get("runbook_id"),
+            "evidence_refs": refs,
+            "all_passed": bool(facts.get("all_passed")),
+            "eligible": bool(
+                facts.get("all_passed") and correlation.get("verdict") == "SUPPORTED"
+                and correlation.get("service_name") == service_name and log_refs and deploy_refs
+            ),
+        }
+        store = TicketStore()
+        ticket = store.get(ticket_number)
+        if ticket is None or ticket.get("session_id") != session_id:
+            return
+        store.update(ticket_number, {"repair_context": binding})
+        store.append_audit_event(
+            "repair.binding", "ticket", ticket_number,
+            fingerprint=ticket.get("alert_fingerprint"), session_id=session_id,
+            details={
+                "service_name": service_name,
+                "runbook_id": plan.get("runbook_id"),
+                "decision": "allow_pr" if binding["eligible"] else "block_pr",
+                "outcome": "eligible" if binding["eligible"] else "ineligible",
+                "verdict": binding.get("verdict"),
+                "evidence_ids": ",".join(ref["record_id"] for ref in refs)[:500],
+            },
+        )
 
     async def async_invoke(self, args: Dict[str, Any], sly_data: Dict[str, Any]) -> Union[Dict[str, Any], str]:
         """Delegates to the synchronous invoke method because it's quick."""
@@ -139,8 +225,17 @@ class RemediationPipeline(CodedTool):
     @staticmethod
     def _schema_check(patched: Dict[str, Any], plan: Dict[str, Any]) -> Dict[str, Any]:
         missing = [key for key in plan["required_config_keys"] if key not in patched]
-        ok = not missing and isinstance(patched["tax"].get("fallback_to_legacy_table"), bool)
-        detail = "patched config has all required keys and valid types" if ok else f"missing keys: {missing}"
+        tax = patched.get("tax")
+        valid_types = (
+            isinstance(tax, dict)
+            and type(tax.get("fallback_to_legacy_table")) is bool
+            and type(tax.get("null_rate_guard")) is bool
+            and isinstance(tax.get("library"), str)
+            and bool(tax.get("library"))
+            and isinstance(tax.get("library_version"), (str, int, float))
+        )
+        ok = not missing and valid_types
+        detail = "patched config has all required keys and valid types" if ok else f"missing keys: {missing}; valid types: {valid_types}"
         return {"name": "Config schema validation", "status": "passed" if ok else "failed",
                 "source": "real", "detail": detail}
 

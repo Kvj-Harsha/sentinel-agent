@@ -1,8 +1,9 @@
 # Sentinel
 
 An AI incident-triage assistant for on-call engineers. A monitoring alert comes in; a team of cooperating agents
-pulls the logs, the recent deploys and the matching runbook, opens a ServiceNow-style ticket, **self-checks its
-root-cause hypothesis with a deterministic correlation test**, suggests the known hotfix and resolves the ticket.
+investigates it using live Prometheus checkout error-rate metrics plus demo log, deploy and runbook fixtures, checks its root-cause hypothesis with a deterministic
+correlation test, and proposes a bounded repair for human review. A ticket is stored locally unless ServiceNow is
+configured. The repair workflow is scoped to an isolated checkout demo app.
 Built with Cognizant's [neuro-san](https://github.com/cognizant-ai-lab/neuro-san) multi-agent framework.
 
 ![Architecture](docs/diagrams/architecture.png)
@@ -109,7 +110,7 @@ docker compose --profile load run --rm k6
 ### Run Prometheus and Alertmanager locally
 
 The Streamlit process also starts a token-protected webhook receiver at `http://localhost:8090/alerts/alertmanager`.
-To try the full Prometheus → Alertmanager → Sentinel → ServiceNow path:
+To try the local Prometheus → Alertmanager → Sentinel alert path, with optional ServiceNow ticket mirroring:
 
 1. Configure a random `SENTINEL_WEBHOOK_TOKEN` (at least 24 characters) in `.env`, set
    `SENTINEL_WEBHOOK_HOST=0.0.0.0`, and copy the same token into `.secrets/sentinel_webhook_token`.
@@ -119,8 +120,23 @@ To try the full Prometheus → Alertmanager → Sentinel → ServiceNow path:
    checkout app's measured 5xx counter; Alertmanager forwards the firing alert to Sentinel.
 5. Stop the stack with `docker compose -f docker-compose.alerting.yml down`.
 
-The checkout app and its traffic are synthetic, while Prometheus metrics, alert routing, GitHub PRs/Actions and
-ServiceNow records use their real APIs. The webhook requires a bearer token, caps request size and alert count, accepts firing alerts only, and suppresses
+For the full local fault-injection flow, webhook safeguard checks, and cleanup policy, follow
+[the local alerting demo runbook](docs/LOCAL_ALERTING_DEMO.md). The runbook includes a local-only launch mode that
+keeps optional ServiceNow and GitHub repair credentials unused.
+
+The checkout app and its traffic are synthetic. Prometheus and Alertmanager run locally and send a real alert through
+the webhook. Sentinel can now query a bounded, read-only Prometheus range for the `checkout-service` error rate around
+the exact alert `startsAt`; it shows the PromQL, source and sample timestamps as verified evidence. Set
+`PROMETHEUS_URL` and optional auth/TLS settings in `.env` for another Prometheus server. Other services do not yet
+have metric queries configured. Sentinel queries local Grafana Loki for bounded checkout-service 5xx logs; Grafana
+Alloy collects only the checkout demo container's Docker output. Set `LOKI_URL` and optional auth/TLS settings for
+another Loki service. JSON log fixtures are available only when `SENTINEL_LOGS_FIXTURE_FALLBACK=true`; by default
+an unavailable Loki source stays unavailable. Other services' deploy history, runbooks, and incident-memory evidence
+still use fixtures. For `checkout-service`, the deployment tool reads explicit GitHub Deployment records and their statuses for the configured
+repository/environment; no records produce live/empty evidence. Other services use fixtures, while commit history is
+context only and never proves a deployment. GitHub repair PRs/Actions and
+ServiceNow records use their APIs only when the corresponding credentials and demo repository/instance are configured.
+Without ServiceNow credentials, tickets stay in the local SQLite store. The webhook requires a bearer token, caps request size and alert count, accepts firing alerts only, and suppresses
 duplicate Alertmanager retries by fingerprint. The receiver binds to `0.0.0.0` for Docker Desktop connectivity;
 keep the token private and use a firewall or a private container network for non-demo deployments.
 
@@ -165,14 +181,25 @@ Optional: `SERVICENOW_ASSIGNMENT_GROUP` (default `Software`), `SERVICENOW_CALLER
 ticket panel shows a link to the live record the moment it exists, then fills in work notes as the agents investigate,
 propose a fix, and wait for your approval. Wake a hibernating PDI from the developer portal first.
 
-### The demo scenario
+### The canonical demo scenario
 
-Inject the fault in the checkout demo app and run the 100-user k6 profile: measured app metrics trigger Prometheus
-and Alertmanager -> Sentinel investigates and opens a ServiceNow ticket -> Streamlit prepares a GitHub PR and shows
-its actual diff and Actions checks -> you approve and merge -> Sentinel applies the allow-listed config, verifies
+The canonical investigation uses the `checkout-500` sample: Sentinel finds the related logs, deploy record and runbook
+in local fixtures, then checks their timestamps deterministically. The optional end-to-end alert demo injects a fault
+in the local checkout app and runs the k6 profile: its metrics trigger local Prometheus and Alertmanager, which sends
+an alert to Sentinel. Sentinel still uses fixture-backed investigation evidence at this stage. It opens a local ticket
+(or a ServiceNow incident when configured), then can prepare a GitHub PR for the dedicated demo repository. After a
+human reviews and merges the PR, Sentinel applies only the allow-listed setting to the localhost demo app, verifies
 checkout, and resolves the incident. The ticket remains open until that human-approved recovery completes.
 
 ---
+
+## Security and data retention
+
+See [Security, credentials, and local data retention](docs/SECURITY_AND_RETENTION.md) for connector scopes, incident-data retention, reset instructions, and secret-rotation guidance.
+
+For the packaged local container profile, health checks, shutdown, backup/recovery, upgrades, and disabling write integrations, see [Local container operations](docs/OPERATIONS.md).
+
+To enable the staged-file secret scan for commits in this clone, run `git config core.hooksPath .githooks`.
 
 ## Project Structure
 
@@ -214,8 +241,8 @@ The backend is a **multi-agent network** defined declaratively in `backend/regis
 |-------|------|
 | `IncidentCommander` | Front man. Routes the incident through the other agents; PII guardrail (email/credit-card redaction) sits on it |
 | `HistorianAgent` | Persistent memory: recalls prior incidents and returns a `suggested_hotfix`; records new incidents |
-| `TicketAgent` | Opens one ServiceNow-style ticket per incident; it remains open while a fix awaits human PR review |
-| `LogsAgent` / `DeployHistoryAgent` / `RunbookAgent` | Independent specialists over logs, deploys (synthetic + one live GitHub-backed source) and Confluence-shaped runbooks |
+| `TicketAgent` | Opens a local ServiceNow-style ticket per incident and optionally mirrors it to a configured ServiceNow instance; it remains open while a fix awaits human PR review |
+| `LogsAgent` / `DeployHistoryAgent` / `RunbookAgent` | Independent specialists over bounded local Loki logs, explicit GitHub Deployments for checkout-service, fixture deploys for other services, and Confluence-shaped runbooks; commits remain context only |
 | `RemediationAgent` | Proposes a fix and runs local preflight checks; GitHub Actions and human approval gate merge and resolution |
 | `Scribe` | Synthesizes the answer, but only after the deterministic `correlation_check` tool re-derives the timestamps and grades the hypothesis |
 
@@ -230,7 +257,7 @@ See [architecture.md](architecture.md) and [summary.md](summary.md) for the deta
 | neuro-san (0.7.7) | Multi-agent orchestration framework (pulls in langchain, langchain-openai, pyhocon, ...) |
 | streamlit | Web chat interface |
 | python-dotenv | `.env` file support |
-| requests | GitHub REST call in `github_deploy_lookup` |
+| requests | Read-only GitHub Deployments and commit-history REST calls |
 | pytest | Test suite |
 | pyyaml | Reads and patches the service config in the fix-and-verify stage |
 
@@ -247,8 +274,10 @@ SENTINEL_PRIMARY_MODEL=openai/gpt-4o-mini
 SENTINEL_FALLBACK_MODEL=anthropic/claude-haiku-4.5      # a cross-provider fallback chain
 ```
 
-To make the GitHub-backed deploy-history tool read your own fork instead of its offline cache, set
-`GITHUB_REPO_OWNER` and `GITHUB_REPO_NAME`.
+The deployment lookup uses `SENTINEL_DEMO_GITHUB_OWNER`, `SENTINEL_DEMO_GITHUB_REPO`, and
+`SENTINEL_GITHUB_DEPLOYMENT_ENVIRONMENT` (defaults to `demo`). Public repositories work without a token; for a private
+repository, set `SENTINEL_GITHUB_DEPLOYMENTS_TOKEN` to a fine-grained token with Deployments: read. The separate
+`GITHUB_REPO_OWNER` and `GITHUB_REPO_NAME` variables only configure the legacy commit-history context tool.
 
 ---
 
@@ -275,5 +304,6 @@ already force UTF-8 output.
 
 Apache License 2.0 (see `LICENSE`). Built on [neuro-san](https://github.com/cognizant-ai-lab/neuro-san) (Cognizant AI
 Lab, Apache-2.0). `aaosa_basic.hocon` and `expertise_scoping_instructions.hocon` are unmodified copies from
-[neuro-san-studio](https://github.com/cognizant-ai-lab/neuro-san-studio) and keep their original license headers. All
-data (logs, deploys, runbooks, tickets, incident history) is synthetic and written for this project.
+[neuro-san-studio](https://github.com/cognizant-ai-lab/neuro-san-studio) and keep their original license headers. The
+checked-in logs, deploys, runbooks, local tickets and incident history are synthetic demo data. Optional external
+GitHub and ServiceNow integrations may retrieve or create records in the configured accounts.

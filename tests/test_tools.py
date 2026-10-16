@@ -42,9 +42,11 @@ def test_logs_lookup_vague_free_text_query_still_matches() -> None:
 
 
 def test_deploy_lookup_most_recent_first() -> None:
-    """Deploys are sorted newest first."""
-    result = DeployLookup().invoke({"service_name": "checkout-service"}, {})
-    assert result["matches"][0]["deployed_at"] == "2026-10-12T13:58:00Z"
+    """Fixture deploys stay available for mapped services; checkout requires explicit GitHub evidence."""
+    result = DeployLookup().invoke({"service_name": "payments-gateway"}, {})
+    assert result["matches"][0]["deployed_at"] == "2026-10-13T16:10:00Z"
+    checkout = DeployLookup().invoke({"service_name": "checkout-service"}, {})
+    assert checkout["source_status"] == "unavailable"
 
 
 def test_runbook_search_matches_and_carries_confluence_fields() -> None:
@@ -73,9 +75,34 @@ def test_runbook_search_generic_words_do_not_false_match() -> None:
     ],
 )
 def test_correlation_check_verdicts(service: str, hypothesis: str, expected: str) -> None:
-    """The deterministic evaluation loop re-derives timestamps itself and grades the hypothesis."""
-    result = CorrelationCheck().invoke({"service_name": service, "hypothesis": hypothesis}, {})
+    """Correlation derives its verdict from source-published log and deployment records."""
+    incident_times = {
+        "checkout-service": "2026-10-12T14:02:00Z",
+        "payments-gateway": "2026-10-13T16:20:00Z",
+        "inventory-service": "2026-10-11T22:05:00Z",
+        "search-service": "2026-10-13T10:15:00Z",
+    }
+    deployment_times = {
+        "checkout-service": "2026-10-12T13:58:00Z",
+        "payments-gateway": "2026-10-13T16:10:00Z",
+        "inventory-service": "2026-10-10T12:00:00Z",
+        "search-service": "2026-09-20T09:00:00Z",
+    }
+    sly_data = _seed_correlation_evidence(service, incident_times[service], deployment_times[service])
+    result = CorrelationCheck().invoke({"service_name": service, "hypothesis": hypothesis}, sly_data)
     assert result["verdict"] == expected
+
+
+def _seed_correlation_evidence(service: str, incident_time: str, deploy_time: str) -> dict:
+    """Build normalized, provenance-labelled evidence like the upstream source tools publish."""
+    return {"sentinel_verified": {"evidence": [
+        {"evidence_type": "log", "service_name": service, "source": "fixture:logs.json",
+         "source_status": "fixture", "event_time": incident_time,
+         "safe_fields": {"environment": "demo"}},
+        {"evidence_type": "deployment_change", "service_name": service, "source": "fixture:deploys.json",
+         "source_status": "fixture", "event_time": deploy_time,
+         "safe_fields": {"environment": "demo", "version": "test-version"}},
+    ]}}
 
 
 def test_recall_incidents_suggests_hotfix_when_recurring(tmp_path: Path) -> None:
@@ -138,6 +165,7 @@ def test_ticket_lifecycle_is_idempotent_per_conversation(tmp_path: Path) -> None
 
 def test_github_lookup_falls_back_to_offline_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     """Any network failure -> the cached snapshot, so a live demo never breaks on connectivity."""
+    monkeypatch.setenv("SENTINEL_OFFLINE_MODE", "false")
 
     def _offline(*_args: object, **_kwargs: object) -> None:
         raise requests.exceptions.ConnectionError("offline")
@@ -148,6 +176,14 @@ def test_github_lookup_falls_back_to_offline_cache(monkeypatch: pytest.MonkeyPat
 
     wrong = GithubDeployLookup().invoke({"service_name": "checkout-service"}, {})
     assert isinstance(wrong, str) and wrong.startswith("Error:")
+
+
+def test_github_lookup_offline_mode_never_attempts_a_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The default offline test/eval mode reads only the checked-in cache."""
+    monkeypatch.setenv("SENTINEL_OFFLINE_MODE", "true")
+    monkeypatch.setattr(GithubDeployLookup, "_fetch_live", staticmethod(lambda: pytest.fail("network fetch attempted")))
+    result = GithubDeployLookup().invoke({"service_name": "sentinel-agent"}, {})
+    assert result["source_status"] in {"cache", "unavailable"}
 
 
 def test_alert_presets_compose_a_report_naming_the_service() -> None:
@@ -184,6 +220,7 @@ def test_record_incident_is_idempotent_per_incident_session(tmp_path: Path) -> N
 def test_tools_publish_verified_facts_to_sly_data(tmp_path: Path) -> None:
     """The deterministic tools expose what they found, independent of the LLM's wording."""
     sly_data: dict = {}
+    sly_data.update(_seed_correlation_evidence("checkout-service", "2026-10-12T14:02:00Z", "2026-10-12T13:58:00Z"))
     CorrelationCheck().invoke(
         {"service_name": "checkout-service", "hypothesis": "The checkout-service deploy caused this."}, sly_data
     )
@@ -217,6 +254,7 @@ def test_servicenow_mirroring_creates_and_resolves_real_incident(tmp_path: Path,
     monkeypatch.setenv("SERVICENOW_INSTANCE", "dev0")
     monkeypatch.setenv("SERVICENOW_USER", "admin")
     monkeypatch.setenv("SERVICENOW_PASSWORD", "x")
+    monkeypatch.setenv("SERVICENOW_ENABLED", "true")
     calls = []
 
     def fake_request(method, path, payload=None):
@@ -259,6 +297,7 @@ def test_servicenow_failure_keeps_ticket_local(tmp_path: Path, monkeypatch) -> N
     monkeypatch.setenv("SERVICENOW_INSTANCE", "dev0")
     monkeypatch.setenv("SERVICENOW_USER", "admin")
     monkeypatch.setenv("SERVICENOW_PASSWORD", "x")
+    monkeypatch.setenv("SERVICENOW_ENABLED", "true")
 
     def boom(*_args, **_kwargs):
         raise servicenow_client.ServiceNowError("down")
@@ -280,14 +319,26 @@ def test_canonical_service_name_fixes_drift_but_not_unknown_services() -> None:
 
 def test_correlation_accepts_drifted_name_and_hypothesis() -> None:
     """The hypothesis may use the drifted spelling the model used throughout."""
+    sly_data = _seed_correlation_evidence("payments-gateway", "2026-10-13T16:20:00Z", "2026-10-13T16:10:00Z")
     result = CorrelationCheck().invoke(
-        {"service_name": "payment-gateway", "hypothesis": "The payment-gateway deploy caused the timeouts."}, {}
+        {"service_name": "payment-gateway", "hypothesis": "The payment-gateway deploy caused the timeouts."}, sly_data
     )
     assert result["verdict"] == "SUPPORTED"
 
 
+def test_correlation_requires_matching_environment_evidence() -> None:
+    """A deployment in another environment cannot support the incident hypothesis."""
+    sly_data = _seed_correlation_evidence("checkout-service", "2026-10-12T14:02:00Z", "2026-10-12T13:58:00Z")
+    sly_data["sentinel_verified"]["evidence"][1]["safe_fields"]["environment"] = "staging"
+    result = CorrelationCheck().invoke(
+        {"service_name": "checkout-service", "hypothesis": "The checkout-service deploy caused this."}, sly_data
+    )
+    assert result["verdict"] == "NOT_SUPPORTED"
+    assert result["insufficient_evidence"] is True
+
+
 def _verified(verdict: str = "SUPPORTED") -> dict:
-    return {"sentinel_verified": {"correlation": {"verdict": verdict}}}
+    return {"sentinel_verified": {"correlation": {"verdict": verdict, "service_name": "checkout-service"}}}
 
 
 def test_remediation_runs_checks_posts_notes_and_gates_resolution(tmp_path: Path, monkeypatch) -> None:

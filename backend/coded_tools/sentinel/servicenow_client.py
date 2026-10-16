@@ -24,7 +24,9 @@ class ServiceNowError(Exception):
 
 
 def is_configured() -> bool:
-    """:return: True when SERVICENOW_INSTANCE, SERVICENOW_USER and SERVICENOW_PASSWORD are all set."""
+    """:return: True when enabled and all required ServiceNow credentials are set."""
+    if os.environ.get("SERVICENOW_ENABLED", "true").strip().lower() not in {"1", "true", "yes", "on"}:
+        return False
     return all(os.environ.get(name) for name in ("SERVICENOW_INSTANCE", "SERVICENOW_USER", "SERVICENOW_PASSWORD"))
 
 
@@ -51,11 +53,11 @@ def _request(method: str, path: str, payload: Optional[Dict[str, Any]] = None) -
             json=payload,
             timeout=REQUEST_TIMEOUT_SECONDS,
         )
-    except requests.RequestException as exc:
-        raise ServiceNowError(f"ServiceNow unreachable: {exc}") from exc
+    except requests.RequestException:
+        raise ServiceNowError("ServiceNow is unreachable or the request failed.") from None
     if response.status_code >= 400:
-        # Never include credentials; the body is ServiceNow's own error message.
-        raise ServiceNowError(f"ServiceNow returned HTTP {response.status_code}: {response.text[:200]}")
+        # Response bodies can echo submitted incident text or implementation details.
+        raise ServiceNowError(f"ServiceNow returned HTTP {response.status_code}.")
     try:
         return response.json()["result"]
     except (ValueError, KeyError) as exc:

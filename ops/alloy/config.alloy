@@ -1,0 +1,47 @@
+discovery.docker "docker" {
+  host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "checkout" {
+  targets = discovery.docker.docker.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    regex         = "checkout-demo"
+    action        = "keep"
+  }
+
+  rule {
+    target_label = "environment"
+    replacement  = "demo"
+  }
+
+  rule {
+    target_label = "service"
+    replacement  = "checkout-service"
+  }
+
+  rule {
+    target_label = "job"
+    replacement  = "checkout-demo"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+}
+
+loki.source.docker "checkout" {
+  host          = "unix:///var/run/docker.sock"
+  targets       = discovery.relabel.checkout.output
+  labels        = {}
+  forward_to    = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

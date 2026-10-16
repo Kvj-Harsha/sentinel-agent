@@ -1,0 +1,20 @@
+services:
+  alloy:
+    image: sentinel-alloy:v1.20.1
+    build:
+      context: ./ops/alloy
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    ports:
+      - "127.0.0.1:12345:12345"
+    volumes:
+      # Docker socket access grants broad control over the local Docker daemon.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy-data:/var/lib/alloy/data
+    restart: unless-stopped
+
+volumes:
+  alloy-data:

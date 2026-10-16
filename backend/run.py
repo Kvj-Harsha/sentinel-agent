@@ -50,6 +50,7 @@ from neuro_san.client.agent_session_factory import DirectAgentSessionFactory  # 
 from coded_tools.sentinel.record_incident import RecordIncident  # noqa: E402
 from coded_tools.sentinel.remediation_pipeline import RemediationPipeline  # noqa: E402
 from coded_tools.sentinel.remediation_pipeline import plan_exists  # noqa: E402
+from coded_tools.sentinel.schemas import sanitize_record  # noqa: E402
 from coded_tools.sentinel.ticket_store import TicketStore  # noqa: E402
 from coded_tools.sentinel.update_ticket import UpdateTicket  # noqa: E402
 
@@ -141,9 +142,13 @@ def _ensure_incident_recorded(response: Dict[str, Any]) -> None:
     if not correlation:
         return
     runbook_id = (facts.get("runbook") or {}).get("id")
+    if correlation.get("delta_minutes") is not None:
+        timing = f"deploy and incident {correlation['delta_minutes']} min apart"
+    else:
+        timing = "insufficient deploy/log evidence to compare timing"
     summary = (
-        f"{correlation['service_name']}: {correlation['verdict']} -- deploy and incident "
-        f"{correlation['delta_minutes']} min apart" + (f"; matched runbook {runbook_id}." if runbook_id else ".")
+        f"{correlation['service_name']}: {correlation['verdict']} -- {timing}"
+        + (f"; matched runbook {runbook_id}." if runbook_id else ".")
     )
     RecordIncident().invoke(
         {
@@ -164,14 +169,20 @@ def format_verified_facts(sly_data: Optional[Dict[str, Any]]) -> str:
     :param sly_data: the sly_data returned by invoke_agent().
     :return: markdown bullet lines, or an empty string if no tool published anything.
     """
-    facts = (sly_data or {}).get("sentinel_verified") or {}
+    facts = sanitize_record((sly_data or {}).get("sentinel_verified") or {})
     lines = []
     correlation = facts.get("correlation")
     if correlation:
-        lines.append(
-            f"- **Correlation check:** {correlation['verdict']} -- deploy at {correlation['deploy_time']}, "
-            f"incident at {correlation['incident_time']} ({correlation['delta_minutes']} min apart)"
-        )
+        if correlation.get("deploy_time") and correlation.get("incident_time"):
+            lines.append(
+                f"- **Correlation check:** {correlation['verdict']} -- deploy at {correlation['deploy_time']}, "
+                f"incident at {correlation['incident_time']} ({correlation.get('delta_minutes', 'unknown')} min apart)"
+            )
+        else:
+            lines.append(
+                f"- **Correlation check:** {'INSUFFICIENT EVIDENCE' if correlation.get('insufficient_evidence') else correlation.get('verdict', 'unknown')}"
+                f" -- {correlation.get('reasoning', 'No deterministic explanation was recorded.')}"
+            )
     runbook = facts.get("runbook")
     if runbook:
         lines.append(f"- **Runbook:** {runbook['id']} -- {runbook['title']} (`{runbook['webui_link']}`)")
@@ -184,6 +195,17 @@ def format_verified_facts(sly_data: Optional[Dict[str, Any]]) -> str:
     memory = facts.get("memory") or {}
     if memory.get("suggested_hotfix"):
         lines.append(f"- **Suggested hotfix:** {memory['suggested_hotfix']}")
+    evidence = facts.get("evidence") or []
+    for record in evidence:
+        status = record.get("source_status", "unknown")
+        event_time = record.get("event_time") or "time unavailable"
+        record_id = record.get("record_id") or "no record ID"
+        source_url = record.get("source_url")
+        link = f" · [open source query]({source_url})" if source_url else ""
+        lines.append(
+            f"- **Evidence · {record.get('evidence_type', 'record')}:** {record.get('summary', '')} "
+            f"(source: {record.get('source', 'unknown')}; status: {status}; ID: {record_id}; event: {event_time}){link}"
+        )
     return "\n".join(lines)
 
 

@@ -123,6 +123,24 @@ class EvalRunner:
             "PYTHONUTF8": "1",
             # The eval must not create ~13 real incidents on a live ServiceNow instance.
             "SERVICENOW_INSTANCE": "",
+            "SERVICENOW_ENABLED": "false",
+            # Use the snapshotted legacy JSON stores for isolated eval writes. The default SQLite
+            # database is durable operator state and must not be changed by an eval run.
+            "SENTINEL_STORAGE_BACKEND": "json",
+            "SENTINEL_OFFLINE_MODE": "true",
+            # The eval harness uses checked-in fixtures unless a separate live integration run is
+            # explicitly designed. Never inherit a developer's configured read connectors here.
+            "CONFLUENCE_BASE_URL": "",
+            "CONFLUENCE_CLOUD_ID": "",
+            "CONFLUENCE_EMAIL": "",
+            "CONFLUENCE_API_TOKEN": "",
+            "CONFLUENCE_SPACE_KEYS": "",
+            "SENTINEL_GITHUB_DEPLOYMENTS_TOKEN": "",
+            "SENTINEL_GITHUB_TOKEN": "",
+            "SENTINEL_DEMO_GITHUB_OWNER": "",
+            "SENTINEL_DEMO_GITHUB_REPO": "",
+            "PROMETHEUS_URL": "",
+            "LOKI_URL": "",
             "AGENT_MANIFEST_FILE": str(BACKEND_DIR / "registries" / "manifest.hocon"),
             "AGENT_TOOL_PATH": str(BACKEND_DIR / "coded_tools"),
             "PYTHONPATH": os.pathsep.join(filter(None, [str(BACKEND_DIR), os.environ.get("PYTHONPATH", "")])),

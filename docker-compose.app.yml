@@ -1,0 +1,74 @@
+services:
+  sentinel:
+    build: .
+    image: sentinel-agent:local
+    env_file:
+      - .env
+    environment:
+      SENTINEL_RECEIVER_ENABLED: "false"
+      SENTINEL_WEBHOOK_STATUS_URL: http://sentinel-webhook:8090/healthz
+      SENTINEL_DB_PATH: /var/lib/sentinel/sentinel.db
+      SENTINEL_BACKUP_DIR: /var/lib/sentinel/.reset-backups
+      SENTINEL_SEED_LEGACY_DATA: "true"
+    ports:
+      - "127.0.0.1:8501:8501"
+    volumes:
+      - sentinel-data:/var/lib/sentinel
+    networks:
+      - sentinel-runtime
+    restart: unless-stopped
+    stop_grace_period: 45s
+
+  sentinel-webhook:
+    build: .
+    image: sentinel-agent:local
+    entrypoint: ["python", "backend/webhook_service.py"]
+    env_file:
+      - .env
+    environment:
+      SENTINEL_WEBHOOK_HOST: 0.0.0.0
+      SENTINEL_DB_PATH: /var/lib/sentinel/sentinel.db
+      SENTINEL_BACKUP_DIR: /var/lib/sentinel/.reset-backups
+      SENTINEL_SEED_LEGACY_DATA: "true"
+    volumes:
+      - sentinel-data:/var/lib/sentinel
+    networks:
+      - sentinel-runtime
+    restart: unless-stopped
+    stop_grace_period: 45s
+    depends_on:
+      sentinel:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "ops/healthcheck.py", "webhook"]
+      interval: 15s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+
+  # Override the local host.docker.internal target for the containerized app profile.
+  alertmanager:
+    image: sentinel-alertmanager:container
+    build:
+      context: ./ops/alertmanager
+      dockerfile: Dockerfile.container
+    depends_on:
+      sentinel-webhook:
+        condition: service_healthy
+    networks:
+      - default
+      - sentinel-runtime
+
+  prometheus:
+    networks:
+      - default
+      - sentinel-runtime
+
+networks:
+  sentinel-runtime:
+    name: sentinel-agent-runtime
+
+volumes:
+  sentinel-data:
+    name: sentinel-agent_sentinel-data
+

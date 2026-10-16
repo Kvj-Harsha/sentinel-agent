@@ -3,6 +3,10 @@
 from typing import Any
 from typing import Dict
 
+from coded_tools.sentinel.schemas import EvidenceRecord
+from coded_tools.sentinel.schemas import dump_model
+from coded_tools.sentinel.schemas import sanitize_record
+
 VERIFIED_KEY = "sentinel_verified"
 
 
@@ -18,4 +22,22 @@ def publish(sly_data: Dict[str, Any], section: str, facts: Dict[str, Any]) -> No
     :param section: which fact group this is ("runbook", "correlation", "memory").
     :param facts: JSON-serialisable facts straight from the tool's own result.
     """
-    sly_data.setdefault(VERIFIED_KEY, {})[section] = facts
+    sly_data.setdefault(VERIFIED_KEY, {})[section] = sanitize_record(facts)
+
+
+def publish_evidence(sly_data: Dict[str, Any], records: list[Dict[str, Any]]) -> None:
+    """Validate and append compact evidence to the UI-visible verified facts channel."""
+    verified = sly_data.setdefault(VERIFIED_KEY, {})
+    existing = sanitize_record(verified.setdefault("evidence", []))
+    verified["evidence"] = existing
+    seen = {
+        (item.get("source"), item.get("record_id"), item.get("event_time"), item.get("evidence_type"))
+        for item in existing
+    }
+    for record in records:
+        validated = dump_model(EvidenceRecord.model_validate(record))
+        identity = (validated.get("source"), validated.get("record_id"), validated.get("event_time"), validated.get("evidence_type"))
+        if identity not in seen:
+            existing.append(validated)
+            seen.add(identity)
+    del existing[:-20]

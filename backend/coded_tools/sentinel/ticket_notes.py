@@ -8,6 +8,7 @@ from typing import Dict
 from typing import Optional
 
 from coded_tools.sentinel import servicenow_client
+from coded_tools.sentinel.schemas import redact_text
 from coded_tools.sentinel.ticket_store import TicketStore
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,7 @@ def add_note(
     number = sly_data.get(TICKET_NUMBER_KEY)
     if not number:
         return False
+    note = redact_text(note)
     posted = sly_data.setdefault("sentinel_notes_posted", [])
     if once_key and once_key in posted:
         return False
@@ -48,8 +50,18 @@ def add_note(
     if sys_id and servicenow_client.is_configured():
         try:
             servicenow_client.update_incident(sys_id, note)
+            store.append_audit_event(
+                "connector.servicenow.work_note", "ticket", number,
+                fingerprint=ticket.get("alert_fingerprint"), session_id=ticket.get("session_id"),
+                details={"connector": "servicenow", "outcome": "success"},
+            )
         except servicenow_client.ServiceNowError as exc:
             logger.warning("ServiceNow note failed (kept locally): %s", exc)
             notes.append(f"ServiceNow sync failed: {exc}")
+            store.append_audit_event(
+                "connector.servicenow.work_note", "ticket", number,
+                fingerprint=ticket.get("alert_fingerprint"), session_id=ticket.get("session_id"),
+                details={"connector": "servicenow", "outcome": "failure"},
+            )
     store.update(number, {"append_work_notes": notes, "sys_updated_on": now})
     return True

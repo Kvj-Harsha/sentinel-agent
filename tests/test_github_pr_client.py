@@ -52,7 +52,20 @@ def test_repair_pr_creates_issue_before_branch_and_links_issue_for_merge(
         return SimpleNamespace(json=lambda: value)
 
     monkeypatch.setattr(github_pr_client, "_request", fake_request)
-    result = github_pr_client.create_repair_pr("INC0010015")
+    context = {
+        "eligible": True,
+        "all_passed": True,
+        "ticket_number": "INC0010015",
+        "session_id": "test-session",
+        "service_name": "checkout-service",
+        "verdict": "SUPPORTED",
+        "runbook_id": "RB-042",
+        "evidence_refs": [
+            {"evidence_type": "log", "source": "fixture:logs.json", "record_id": "log-1", "source_status": "fixture"},
+            {"evidence_type": "deployment", "source": "github:deployments", "record_id": "deployment-1", "source_status": "live"},
+        ],
+    }
+    result = github_pr_client.create_repair_pr("INC0010015", context, "test-session")
 
     methods_and_paths = [(method, path) for method, path, _kwargs in calls]
     issue_creation = methods_and_paths.index(("POST", "/issues"))

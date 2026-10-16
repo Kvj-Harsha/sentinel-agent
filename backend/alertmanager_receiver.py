@@ -1,6 +1,7 @@
 """Token-protected Prometheus Alertmanager webhook for Sentinel's local demo stack."""
 
 import hmac
+import atexit
 import json
 import logging
 import os
@@ -11,6 +12,7 @@ from datetime import datetime
 from datetime import timezone
 from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 from typing import Dict
 from typing import List
@@ -21,15 +23,21 @@ from alerts import compose_incident_report
 from run import format_verified_facts
 from run import invoke_agent
 from coded_tools.sentinel.ticket_store import TicketStore
+from coded_tools.sentinel.schemas import redact_text
 
 LOGGER = logging.getLogger(__name__)
 MAX_REQUEST_BYTES = 1_048_576
 MAX_ALERTS_PER_REQUEST = 5
 FINGERPRINT_TTL_SECONDS = 3600
+MAX_ACTIVE_JOBS = 4
+WORKER_SHUTDOWN_TIMEOUT_SECONDS = 30
 _lock = threading.Lock()
+_job_slots = threading.BoundedSemaphore(MAX_ACTIVE_JOBS)
 _jobs: List[Dict[str, Any]] = []
 _fingerprints: Dict[str, float] = {}
+_worker_threads: set[threading.Thread] = set()
 _server: ThreadingHTTPServer = None
+_server_thread: threading.Thread = None
 
 
 def _utc_now() -> str:
@@ -44,6 +52,13 @@ def snapshot_jobs() -> List[Dict[str, Any]]:
     for job in jobs:
         if job.get("ticket_number") or job.get("state") not in ("queued", "investigating"):
             continue
+        fingerprint = job.get("fingerprint")
+        if fingerprint:
+            ticket = TicketStore().find_by_fingerprint(fingerprint)
+            if ticket:
+                job["ticket_number"] = ticket.get("number")
+                job["ticket_detected_at"] = _utc_now()
+                continue
         ticket_count_before = job.get("ticket_count_before")
         if ticket_count_before is None:
             continue
@@ -67,7 +82,13 @@ def _process_job(job: Dict[str, Any]) -> None:
         job["state"] = "investigating"
         report = compose_incident_report(job["alert"])
         job["report"] = report
-        response = invoke_agent(report)
+        response = invoke_agent(
+            report,
+            sly_data={
+                "alert_fingerprint": job.get("fingerprint"),
+                "incident_session_id": job.get("id"),
+            },
+        )
         sly_data = response.get("sly_data") or {}
         job["response"] = response.get("text", "")
         job["verified_facts"] = sly_data.get("sentinel_verified") or {}
@@ -76,19 +97,26 @@ def _process_job(job: Dict[str, Any]) -> None:
         job["state"] = "completed"
     except (OSError, ValueError, RuntimeError, KeyError) as exc:
         LOGGER.exception("Alertmanager job %s failed", job["id"])
-        job["error"] = str(exc)
+        job["error"] = redact_text(str(exc))
         job["state"] = "failed"
     except Exception as exc:  # pylint: disable=broad-exception-caught
         LOGGER.exception("Unexpected Alertmanager job failure: %s", job["id"])
-        job["error"] = f"Unexpected investigation error: {exc}"
+        job["error"] = redact_text(f"Unexpected investigation error: {exc}")
         job["state"] = "failed"
     finally:
         job["updated_at"] = _utc_now()
+        with _lock:
+            _worker_threads.discard(threading.current_thread())
+        _job_slots.release()
 
 
 def _queue_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
     """Queues a normalized alert and suppresses Alertmanager retry duplicates."""
     fingerprint = str(alert.get("fingerprint") or "")
+    if fingerprint:
+        existing_ticket = TicketStore().find_by_fingerprint(fingerprint)
+        if existing_ticket:
+            return {"status": "duplicate", "fingerprint": fingerprint, "ticket_number": existing_ticket.get("number")}
     ticket_count_before = len(TicketStore().load())
     now = time.monotonic()
     with _lock:
@@ -97,6 +125,8 @@ def _queue_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
             _fingerprints.pop(key, None)
         if fingerprint and fingerprint in _fingerprints:
             return {"status": "duplicate", "fingerprint": fingerprint}
+        if not _job_slots.acquire(blocking=False):
+            return {"status": "busy", "fingerprint": fingerprint}
 
         job = {
             "id": uuid.uuid4().hex[:12],
@@ -106,6 +136,7 @@ def _queue_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
             "ticket_count_before": ticket_count_before,
             "alert_name": alert["title"],
             "service": alert["tags"][0].split(":", 1)[1],
+            "fingerprint": fingerprint,
             "severity": (alert.get("body") or "").split(".", 1)[0].replace("Severity: ", ""),
             "alert": alert,
         }
@@ -114,7 +145,18 @@ def _queue_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
         if fingerprint:
             _fingerprints[fingerprint] = now
 
-    threading.Thread(target=_process_job, args=(job,), daemon=True, name=f"sentinel-alert-{job['id']}").start()
+        worker = threading.Thread(target=_process_job, args=(job,), daemon=True, name=f"sentinel-alert-{job['id']}")
+        _worker_threads.add(worker)
+        try:
+            worker.start()
+        except RuntimeError:
+            _worker_threads.discard(worker)
+            if fingerprint:
+                _fingerprints.pop(fingerprint, None)
+            _jobs.remove(job)
+            _job_slots.release()
+            LOGGER.exception("Could not start alert investigation worker")
+            return {"status": "busy", "fingerprint": fingerprint}
     return {"status": "accepted", "job_id": job["id"], "fingerprint": fingerprint}
 
 
@@ -145,7 +187,7 @@ class AlertmanagerHandler(BaseHTTPRequestHandler):
             self._send(404, {"error": "not found"})
             return
 
-        expected_token = os.environ.get("SENTINEL_WEBHOOK_TOKEN", "")
+        expected_token = _webhook_token()
         provided = self.headers.get("Authorization", "")
         valid_auth = bool(expected_token) and hmac.compare_digest(provided, f"Bearer {expected_token}")
         if not valid_auth:
@@ -179,7 +221,17 @@ class AlertmanagerHandler(BaseHTTPRequestHandler):
                                     "reason": str(exc)})
                     continue
                 accepted.append(_queue_alert(normalized))
-            self._send(202, {"accepted": accepted, "ignored": ignored, "receiver": "sentinel"})
+            is_busy = any(item.get("status") == "busy" for item in accepted)
+            if is_busy:
+                self.send_response(503)
+                self.send_header("Retry-After", "5")
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                body = _json_bytes({"accepted": accepted, "ignored": ignored, "receiver": "sentinel", "error": "investigation capacity reached; retry later"})
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self._send(202, {"accepted": accepted, "ignored": ignored, "receiver": "sentinel"})
         except (json.JSONDecodeError, UnicodeDecodeError, AttributeError, TypeError, ValueError) as exc:
             self._send(400, {"error": str(exc)})
 
@@ -191,9 +243,10 @@ class AlertmanagerHandler(BaseHTTPRequestHandler):
 def start_receiver() -> None:
     """Starts the webhook server once per Streamlit process; requires a configured shared token."""
     global _server
+    global _server_thread
     if _server is not None:
         return
-    token = os.environ.get("SENTINEL_WEBHOOK_TOKEN", "")
+    token = _webhook_token()
     if len(token) < 24:
         LOGGER.warning("Alertmanager receiver disabled: configure a 24+ character SENTINEL_WEBHOOK_TOKEN")
         return
@@ -204,5 +257,54 @@ def start_receiver() -> None:
     except OSError as exc:
         LOGGER.error("Could not start Alertmanager receiver on %s:%s: %s", host, port, exc)
         return
-    threading.Thread(target=_server.serve_forever, daemon=True, name="sentinel-alertmanager-http").start()
+    _server_thread = threading.Thread(target=_server.serve_forever, daemon=True, name="sentinel-alertmanager-http")
+    _server_thread.start()
+    atexit.register(stop_receiver)
     LOGGER.info("Alertmanager webhook listening on %s:%s", host, port)
+
+
+def _webhook_token() -> str:
+    """Read the bearer token from a mounted secret file, with env support for local development."""
+    secret_file = os.environ.get("SENTINEL_WEBHOOK_TOKEN_FILE", "").strip()
+    if secret_file:
+        try:
+            return Path(secret_file).read_text(encoding="utf-8").strip()
+        except OSError:
+            LOGGER.error("Webhook secret file is unavailable; receiver remains disabled.")
+            return ""
+    return os.environ.get("SENTINEL_WEBHOOK_TOKEN", "")
+
+
+def stop_receiver() -> None:
+    """Stop accepting requests, close the socket, and give active investigations time to finish."""
+    global _server
+    global _server_thread
+    server = _server
+    receiver_thread = _server_thread
+    if server is None:
+        return
+    server.shutdown()
+    server.server_close()
+    if receiver_thread and receiver_thread is not threading.current_thread():
+        receiver_thread.join(timeout=5)
+    with _lock:
+        workers = list(_worker_threads)
+    for worker in workers:
+        if worker is not threading.current_thread():
+            worker.join(timeout=WORKER_SHUTDOWN_TIMEOUT_SECONDS)
+    remaining = sum(worker.is_alive() for worker in workers)
+    if remaining:
+        LOGGER.warning("Receiver stopped with %d investigation(s) still running after the shutdown grace period.", remaining)
+    _server = None
+    _server_thread = None
+
+
+def receiver_status() -> Dict[str, Any]:
+    """Returns safe listener health for the UI; never returns the bearer token or payload."""
+    if _server is None or _server_thread is None or not _server_thread.is_alive():
+        return {"status": "disabled", "host": None, "port": None, "active_jobs": 0, "capacity": MAX_ACTIVE_JOBS}
+    host, port = _server.server_address[:2]
+    with _lock:
+        active_jobs = len(_worker_threads)
+    return {"status": "listening", "host": host, "port": port,
+            "active_jobs": active_jobs, "capacity": MAX_ACTIVE_JOBS}

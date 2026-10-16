@@ -11,8 +11,16 @@ from typing import Union
 from neuro_san.interfaces.coded_tool import CodedTool
 
 from coded_tools.sentinel.service_names import canonical_service_name
+from coded_tools.sentinel.schemas import EvidenceRecord
+from coded_tools.sentinel.schemas import SourceStatus
+from coded_tools.sentinel.schemas import dump_model
+from coded_tools.sentinel.schemas import redact_text
+from coded_tools.sentinel.schemas import sanitize_record
+from coded_tools.sentinel.schemas import unavailable_result
+from coded_tools.sentinel.schemas import utc_now
 
 from coded_tools.sentinel.ticket_notes import add_note
+from coded_tools.sentinel.verified_facts import publish_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -58,12 +66,12 @@ class LogsLookup(CodedTool):
         include_baseline: bool = bool(args.get("include_baseline", False))
 
         if not service_name and not query:
-            return "Error: Please provide at least a service_name or a query keyword to search logs for."
+            return unavailable_result("fixture:logs.json", "Please provide a service_name or query keyword to search logs.")
 
         try:
             entries: List[Dict[str, Any]] = json.loads(DATA_FILE.read_text(encoding="utf-8"))
         except OSError as exc:
-            return f"Error: Could not read logs dataset: {exc}"
+            return unavailable_result("fixture:logs.json", f"Could not read logs dataset: {exc}")
 
         matches = []
         for entry in entries:
@@ -80,6 +88,9 @@ class LogsLookup(CodedTool):
         if not matches:
             return {
                 "matches": [],
+                "evidence": [],
+                "source": "fixture:logs.json",
+                "source_status": SourceStatus.FIXTURE.value,
                 "summary": (
                     "No matching anomalous log entries found for the given service/query. "
                     "Pass include_baseline=true to also see normal traffic."
@@ -88,16 +99,25 @@ class LogsLookup(CodedTool):
 
         first, last = matches[0], matches[-1]
         errors = sum(m.get("count", 1) for m in matches if m.get("level") == "ERROR")
-        stack = (first.get("stack_trace") or "").splitlines()
         note = (
             f"[Logs] {len(matches)} anomalous entries for {first['service']} between {first['timestamp']} and "
             f"{last['timestamp']} ({errors} errors). First: {first['level']} {first.get('status_code', '')} - "
-            f"{first['message']}"
+            f"{redact_text(first['message'])}"
         )
-        if stack:
-            note += f" Trace {first.get('trace_id', '-')} on {first.get('pod', '-')}: {stack[0].strip()} | {stack[1].strip() if len(stack) > 1 else ''}"
         add_note(sly_data, note, once_key=f"logs:{first['service']}")
-        return {"matches": matches, "summary": f"Found {len(matches)} matching anomalous log entries."}
+        retrieved_at = utc_now()
+        evidence = [dump_model(EvidenceRecord(
+            evidence_type="log", service_name=entry["service"], source="fixture:logs.json",
+            source_status=SourceStatus.FIXTURE, query=query or service_name,
+            record_id=entry.get("trace_id"), event_time=entry.get("timestamp"), retrieved_at=retrieved_at,
+            summary=f"{entry.get('level', 'LOG')} {entry.get('status_code', '')}: {entry.get('message', '')}",
+            safe_fields={key: entry[key] for key in ("service", "timestamp", "level", "status_code", "count", "trace_id", "pod", "message") if key in entry},
+        )) for entry in matches]
+        publish_evidence(sly_data, evidence)
+        safe_matches = sanitize_record([{key: value for key, value in entry.items() if key != "stack_trace"} for entry in matches])
+        return {"matches": safe_matches, "evidence": evidence, "source": "fixture:logs.json",
+                "source_status": SourceStatus.FIXTURE.value,
+                "summary": f"Found {len(matches)} matching anomalous log entries."}
 
     async def async_invoke(self, args: Dict[str, Any], sly_data: Dict[str, Any]) -> Union[Dict[str, Any], str]:
         """Delegates to the synchronous invoke method because it's quick, non-blocking."""

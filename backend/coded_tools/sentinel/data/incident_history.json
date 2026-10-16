@@ -16,5 +16,14 @@
     "runbook_id": "RB-042",
     "summary": "Second occurrence of the same tax-calc config migration issue after a follow-up deploy; rolled back again.",
     "recorded_at": "2026-09-22T09:40:00+00:00"
+  },
+  {
+    "session_id": "0a54c255-faac-4fe0-90ec-7dcd6810fac0",
+    "service_name": "checkout-service",
+    "hypothesis": "Elevated HTTP 5xx rates linked to recent deploy of tax-calc-lib v3 and necessary migrations not applied.",
+    "verdict": "SUPPORTED",
+    "runbook_id": "RB-042",
+    "summary": "Elevated HTTP 5xx rates observed; roll back advised as per runbook.",
+    "recorded_at": "2026-10-15T19:01:22.351167+00:00"
   }
 ]

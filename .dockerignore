@@ -1,0 +1,16 @@
+.git
+.venv
+.pytest_cache
+.ruff_cache
+.pytest-tmp
+__pycache__
+*.py[cod]
+.env
+.env.*
+!.env.example
+.secrets
+backend/coded_tools/sentinel/data/*.db
+backend/coded_tools/sentinel/data/*.db-*
+backend/coded_tools/sentinel/data/.reset-backups
+eval/_reports
+eval/_thinking

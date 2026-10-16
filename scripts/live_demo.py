@@ -4,6 +4,9 @@ Every command that changes something (GitHub, the checkout app, load) refuses to
 will do first. Reads (preflight, status) are always safe.
 
     python scripts/live_demo.py preflight
+    python scripts/live_demo.py prepare --yes    # stage the demo ONCE: re-arm the fault switch + record a fresh deployment
+    # ...then press "Inject checkout fault" in the checkout app (http://localhost:8000). That is the only trigger:
+    # the app generates its own shopper traffic, Prometheus fires the alert, and Sentinel investigates by itself.
     python scripts/live_demo.py deploy --yes     # 1. record a real GitHub Deployment (the "cause" Sentinel must find)
     python scripts/live_demo.py fault  --yes     # 2. inject the checkout fault in the local demo app
     python scripts/live_demo.py load   --yes     # 3. real shopper traffic -> Prometheus alert -> Sentinel
@@ -117,6 +120,21 @@ def cmd_deploy(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_prepare(args: argparse.Namespace) -> int:
+    _need_yes(args, "re-enable the fault switch in the shared settings volume, clear any running fault, and "
+                    f"record a fresh GitHub Deployment on {OWNER}/{REPO}")
+    subprocess.run(
+        ["docker", "run", "--rm", "-v", "checkout-demo-settings:/config", "alpine", "sh", "-c",
+         "printf '{\n  \"demo_faults_enabled\": true,\n  \"checkout_error_rate\": 0.0\n}\n' > /config/settings.json"
+         " && chown -R 10001:10001 /config && chmod 644 /config/settings.json"],
+        check=True,
+    )
+    print(requests.post(f"{APP_URL}/demo/recover", timeout=5).json())
+    code = cmd_deploy(args)
+    print("Ready. Now press 'Inject checkout fault' at", APP_URL, "- nothing else is needed.")
+    return code
+
+
 def cmd_fault(args: argparse.Namespace) -> int:
     _need_yes(args, f"POST {APP_URL}/demo/fault (checkout calls start failing on the LOCAL demo app)")
     print(requests.post(f"{APP_URL}/demo/fault", timeout=5).json())
@@ -149,10 +167,10 @@ def cmd_status(_args: argparse.Namespace) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=["preflight", "deploy", "fault", "load", "status", "reset"])
+    parser.add_argument("command", choices=["preflight", "prepare", "deploy", "fault", "load", "status", "reset"])
     parser.add_argument("--yes", action="store_true", help="confirm a command that changes something")
     args = parser.parse_args()
-    return {"preflight": cmd_preflight, "deploy": cmd_deploy, "fault": cmd_fault, "load": cmd_load,
+    return {"preflight": cmd_preflight, "prepare": cmd_prepare, "deploy": cmd_deploy, "fault": cmd_fault, "load": cmd_load,
             "status": cmd_status, "reset": cmd_reset}[args.command](args)
 
 

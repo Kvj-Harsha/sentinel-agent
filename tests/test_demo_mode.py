@@ -151,3 +151,18 @@ def test_runbook_query_includes_the_alert_symptoms(monkeypatch):
     sly_data = {"sentinel_incident": {"symptoms": "High 5xx rate on checkout-service NullPointerException tax library deploy"}}
     result = RunbookSearch().invoke({"query": "checkout error"}, sly_data)
     assert result["matches"], "alert symptoms should be merged into the runbook query"
+
+
+def test_resolved_incident_does_not_swallow_the_next_alert(tmp_path):
+    """The same alert firing again after its incident was resolved must open a new ticket."""
+    from coded_tools.sentinel.ticket_store import TicketStore  # pylint: disable=import-outside-toplevel
+
+    store = TicketStore(data_file=tmp_path / "tickets.json")
+    base = {"service_name": "checkout-service", "alert_fingerprint": "f99d", "state": "In Progress", "work_notes": []}
+    first = store.append({**base, "number": store.next_number()})
+    assert store.find_by_fingerprint("f99d")["number"] == first["number"]
+
+    store.update(first["number"], {"state": "Resolved"})
+
+    assert store.find_by_fingerprint("f99d") is None
+    assert store.find_by_fingerprint("f99d", include_resolved=True)["number"] == first["number"]

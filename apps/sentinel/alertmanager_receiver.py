@@ -132,6 +132,8 @@ def _process_job(job: Dict[str, Any]) -> None:
         job["updated_at"] = _utc_now()
         _persist(job)
         with _lock:
+            # The in-memory guard only covers retries while a run is in flight; afterwards the open-ticket check decides.
+            _fingerprints.pop(str(job.get("fingerprint") or ""), None)
             _worker_threads.discard(threading.current_thread())
         _job_slots.release()
 

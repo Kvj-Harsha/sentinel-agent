@@ -128,16 +128,22 @@ class TicketStore:
             row = connection.execute("SELECT data_json FROM tickets WHERE number = ?", (number,)).fetchone()
         return sanitize_record(json.loads(row["data_json"])) if row else None
 
-    def find_by_fingerprint(self, fingerprint: str) -> Optional[Dict[str, Any]]:
+    def find_by_fingerprint(self, fingerprint: str, include_resolved: bool = False) -> Optional[Dict[str, Any]]:
+        """
+        Newest ticket for an alert fingerprint. Resolved tickets are skipped by default: the same alert firing again
+        after its incident was fixed is a new incident, not a retry of the old one.
+        """
         if not fingerprint:
             return None
         if self.backend == "json":
-            return next((item for item in reversed(self.load()) if item.get("alert_fingerprint") == fingerprint), None)
-        with self.db.connection() as connection:
-            row = connection.execute(
-                "SELECT data_json FROM tickets WHERE fingerprint = ? ORDER BY rowid DESC LIMIT 1", (fingerprint,)
-            ).fetchone()
-        return sanitize_record(json.loads(row["data_json"])) if row else None
+            candidates = [item for item in reversed(self.load()) if item.get("alert_fingerprint") == fingerprint]
+        else:
+            with self.db.connection() as connection:
+                rows = connection.execute(
+                    "SELECT data_json FROM tickets WHERE fingerprint = ? ORDER BY rowid DESC", (fingerprint,)
+                ).fetchall()
+            candidates = [sanitize_record(json.loads(row["data_json"])) for row in rows]
+        return next((item for item in candidates if include_resolved or item.get("state") != "Resolved"), None)
 
     def update(self, number: str, changes: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         changes = sanitize_record(changes)

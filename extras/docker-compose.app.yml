@@ -14,12 +14,16 @@ services:
       SENTINEL_DB_PATH: /var/lib/sentinel/sentinel.db
       SENTINEL_BACKUP_DIR: /var/lib/sentinel/.reset-backups
       SENTINEL_SEED_LEGACY_DATA: "true"
+      PROMETHEUS_URL: http://prometheus:9090
+      LOKI_URL: http://host.docker.internal:3100
     ports:
       - "127.0.0.1:8501:8501"
     volumes:
       - sentinel-data:/var/lib/sentinel
     networks:
       - sentinel-runtime
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
     stop_grace_period: 45s
 
@@ -36,10 +40,14 @@ services:
       SENTINEL_DB_PATH: /var/lib/sentinel/sentinel.db
       SENTINEL_BACKUP_DIR: /var/lib/sentinel/.reset-backups
       SENTINEL_SEED_LEGACY_DATA: "true"
+      PROMETHEUS_URL: http://prometheus:9090
+      LOKI_URL: http://host.docker.internal:3100
     volumes:
       - sentinel-data:/var/lib/sentinel
     networks:
       - sentinel-runtime
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
     stop_grace_period: 45s
     depends_on:

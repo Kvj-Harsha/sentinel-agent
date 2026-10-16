@@ -8,6 +8,9 @@ from coded_tools.sentinel.schemas import dump_model
 from coded_tools.sentinel.schemas import sanitize_record
 
 VERIFIED_KEY = "sentinel_verified"
+# Cap evidence PER SOURCE TYPE. A single global cap let a chatty source (Loki can return ~20 log lines) evict the
+# deployment and metric records that the correlation check needs.
+MAX_RECORDS_PER_TYPE = 8
 
 
 def publish(sly_data: Dict[str, Any], section: str, facts: Dict[str, Any]) -> None:
@@ -40,4 +43,17 @@ def publish_evidence(sly_data: Dict[str, Any], records: list[Dict[str, Any]]) ->
         if identity not in seen:
             existing.append(validated)
             seen.add(identity)
-    del existing[:-20]
+    by_type: Dict[str, list] = {}
+    for item in existing:
+        by_type.setdefault(item.get("evidence_type", "record"), []).append(item)
+    verified["evidence"] = [
+        item for items in by_type.values() for item in _downsample(items, MAX_RECORDS_PER_TYPE)
+    ]
+
+
+def _downsample(items: list, limit: int) -> list:
+    """Keep at most ``limit`` records, always including the first and last and spreading the rest evenly."""
+    if len(items) <= limit:
+        return items
+    step = (len(items) - 1) / (limit - 1)
+    return [items[round(index * step)] for index in range(limit)]

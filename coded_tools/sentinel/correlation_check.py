@@ -136,8 +136,11 @@ class CorrelationCheck(CodedTool):
             return f"Error: Missing required argument(s): {', '.join(missing)}."
 
         anomaly = _earliest_anomaly(service_name, sly_data)
-        deploy = _most_recent_deploy(service_name, anomaly.get("environment") if anomaly else "", sly_data)
         lookup = (sly_data.get("sentinel_verified") or {}).get("deployment_lookup") or {}
+        # Log lines often carry no environment label; fall back to the environment the deployment lookup was
+        # queried with (taken from the incident), otherwise a live deployment would never match.
+        environment = (anomaly.get("environment") if anomaly else "") or lookup.get("environment") or ""
+        deploy = _most_recent_deploy(service_name, environment, sly_data)
 
         if anomaly is None or deploy is None:
             if deploy is None and lookup.get("service_name") == service_name:

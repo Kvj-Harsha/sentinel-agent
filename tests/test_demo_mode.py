@@ -43,3 +43,40 @@ def test_replay_runbook_is_fixture_even_when_confluence_is_configured(monkeypatc
     result = RunbookSearch().invoke({"query": "checkout-service NullPointerException tax library deploy"}, {})
     assert result["source_status"] == "fixture"
     assert result["matches"]
+
+
+def test_live_deployment_matches_when_logs_have_no_environment_label():
+    """Loki lines have no environment label; the deployment lookup's environment must stand in for it."""
+    sly_data = {"sentinel_verified": {
+        "deployment_lookup": {"service_name": "checkout-service", "environment": "demo",
+                              "source": "github:deployments", "source_status": "live", "record_count": 1},
+        "evidence": [
+            {"evidence_type": "log", "service_name": "checkout-service", "event_time": "2026-10-16T14:47:20Z",
+             "source": "loki", "source_status": "live", "safe_fields": {"labels": {"service": "checkout-service"}}},
+            {"evidence_type": "deployment", "service_name": "checkout-service", "event_time": "2026-10-16T14:45:27Z",
+             "source": "github:deployments", "source_status": "live",
+             "safe_fields": {"state": "success", "environment": "demo", "commit_sha": "715d49f"}},
+        ]}}
+    verdict = CorrelationCheck().invoke({"service_name": "checkout-service", "hypothesis": HYPOTHESIS}, sly_data)
+    assert verdict["verdict"] == "SUPPORTED"
+
+
+def test_chatty_source_cannot_evict_deployment_evidence():
+    """20 log lines must not push the deployment record out of the verified evidence."""
+    from coded_tools.sentinel.verified_facts import publish_evidence  # pylint: disable=import-outside-toplevel
+
+    def record(kind: str, index: int) -> dict:
+        return {"evidence_type": kind, "service_name": "checkout-service", "source": kind, "source_status": "live",
+                "record_id": f"{kind}-{index}", "event_time": f"2026-10-16T14:47:{index:02d}Z", "summary": kind,
+                "retrieved_at": "2026-10-16T14:50:00Z"}
+
+    sly_data: dict = {}
+    publish_evidence(sly_data, [record("deployment", 0)])
+    publish_evidence(sly_data, [record("log", i) for i in range(20)])
+    publish_evidence(sly_data, [record("metric", i) for i in range(48)])
+
+    kept = sly_data["sentinel_verified"]["evidence"]
+    assert [r["record_id"] for r in kept if r["evidence_type"] == "deployment"] == ["deployment-0"]
+    logs = [r["record_id"] for r in kept if r["evidence_type"] == "log"]
+    assert logs[0] == "log-0" and len(logs) == 8  # earliest log is always kept
+    assert len([r for r in kept if r["evidence_type"] == "metric"]) == 8

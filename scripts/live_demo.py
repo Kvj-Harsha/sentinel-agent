@@ -125,7 +125,13 @@ def cmd_fault(args: argparse.Namespace) -> int:
 
 def cmd_load(args: argparse.Namespace) -> int:
     _need_yes(args, "run 2 minutes of k6 shopper traffic against the local checkout app (docker compose --profile load)")
-    return subprocess.call(["docker", "compose", "--profile", "load", "run", "--rm", "k6"], cwd=DEMO_APP_DIR)
+    # The script is streamed over stdin so Docker Desktop never has to bind-mount it (that mount fails on some hosts).
+    script = (DEMO_APP_DIR / "load" / "checkout.js").read_bytes()
+    return subprocess.run(
+        ["docker", "run", "--rm", "-i", "--add-host", "host.docker.internal:host-gateway", "grafana/k6:0.53.0",
+         "run", "--vus", "100", "--duration", "2m", "-"],
+        input=script, check=False,
+    ).returncode
 
 
 def cmd_reset(args: argparse.Namespace) -> int:

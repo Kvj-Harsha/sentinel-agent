@@ -51,9 +51,9 @@ You are the Incident Commander of Sentinel. For an incident report (service, sym
    runbook match (exact id, title, recommended action and link). The Scribe runs the deterministic correlation check.
 4. Ask the Responder to finalize the incident, then answer. Never claim a repair was applied; a human must review and
    merge the PR.
-Your final answer MUST include: "Ticket: <number> (<state>)"; the correlation verdict with its reasoning (state NOT_SUPPORTED
-plainly, never smooth it over); "Runbook: <id> - <title>" with its link verbatim if one was found; "Suggested hotfix: <text>"
-verbatim if the Responder returned one; and which evidence was fixture versus live.
+Your final answer is the Scribe's short summary followed by the Responder's finalize `report` block copied VERBATIM (ticket,
+verdict, runbook, hotfix, evidence sources). Never restate or reword those lines and never contradict them; state NOT_SUPPORTED
+plainly, never smooth it over.
 """ ${this_is_not_a_game} "\n" ${exact_values_rule} "\n" ${aaosa_instructions}
         tools = ["Responder", "LogsAgent", "MetricsAgent", "DeployHistoryAgent", "RunbookAgent", "Scribe"]
         # sly_data is the framework's private control channel and is not returned upstream by default. Allowing
@@ -150,7 +150,8 @@ OPEN: call open_ticket once with service_name and a short_description of the sym
 service_name. Report the ticket number and, verbatim, the suggested_hotfix if recall_incidents returned one.
 FINALIZE: call finalize_incident once (it records the incident and, only for a SUPPORTED verdict, prepares a bounded config
 fix with local preflight checks), then call update_ticket once with a work note summarizing the outcome. Keep the ticket
-In Progress: only a human reviewing and merging the PR may resolve it. Report the ticket number and state.
+In Progress: only a human reviewing and merging the PR may resolve it. Return the `report` field from finalize_incident
+VERBATIM: it is built from tool-verified facts (ticket, verdict, runbook, hotfix, which sources were fixture or live).
 Never invent a ticket number, never open a second ticket, and never claim a running service was changed.
 """ ${this_is_not_a_game} "\n" ${exact_values_rule} "\n" ${aaosa_instructions}
         tools = ["open_ticket", "recall_incidents", "finalize_incident", "update_ticket"]

@@ -24,6 +24,7 @@ from run import format_verified_facts
 from run import invoke_agent
 from coded_tools.sentinel.ticket_store import TicketStore
 from coded_tools.sentinel.schemas import redact_text
+from coded_tools.sentinel.sqlite_store import SQLiteDatabase
 
 LOGGER = logging.getLogger(__name__)
 MAX_REQUEST_BYTES = 1_048_576
@@ -45,10 +46,33 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+_PERSISTED_FIELDS = (
+    "id", "received_at", "updated_at", "state", "alert_name", "service", "severity", "fingerprint",
+    "ticket_number", "response", "verified_markdown", "error",
+)
+
+
+def _persist(job: Dict[str, Any]) -> None:
+    """Share the job through the SQLite database: the UI and the webhook may run in separate containers."""
+    if os.environ.get("SENTINEL_STORAGE_BACKEND", "sqlite").lower() != "sqlite":
+        return
+    try:
+        SQLiteDatabase().save_alert_job({key: job.get(key) for key in _PERSISTED_FIELDS})
+    except Exception:  # pylint: disable=broad-exception-caught
+        LOGGER.warning("Could not persist alert job %s", job.get("id"), exc_info=True)
+
+
 def snapshot_jobs() -> List[Dict[str, Any]]:
-    """Returns safe copies of recent webhook jobs and links tickets as soon as they are stored."""
+    """Returns safe copies of recent webhook jobs (this process plus those persisted by another process)."""
     with _lock:
         jobs = list(reversed(_jobs[-20:]))
+    if os.environ.get("SENTINEL_STORAGE_BACKEND", "sqlite").lower() == "sqlite":
+        try:
+            known = {job["id"] for job in jobs}
+            jobs += [job for job in SQLiteDatabase().recent_alert_jobs() if job["id"] not in known]
+            jobs.sort(key=lambda job: job.get("updated_at") or "", reverse=True)
+        except Exception:  # pylint: disable=broad-exception-caught
+            LOGGER.warning("Could not read persisted alert jobs", exc_info=True)
     for job in jobs:
         if job.get("ticket_number") or job.get("state") not in ("queued", "investigating"):
             continue
@@ -80,6 +104,7 @@ def _process_job(job: Dict[str, Any]) -> None:
     """Runs the existing Sentinel investigation workflow for one accepted alert."""
     try:
         job["state"] = "investigating"
+        _persist(job)
         report = compose_incident_report(job["alert"])
         job["report"] = report
         response = invoke_agent(
@@ -105,6 +130,7 @@ def _process_job(job: Dict[str, Any]) -> None:
         job["state"] = "failed"
     finally:
         job["updated_at"] = _utc_now()
+        _persist(job)
         with _lock:
             _worker_threads.discard(threading.current_thread())
         _job_slots.release()
@@ -142,6 +168,7 @@ def _queue_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
         }
         _jobs.append(job)
         del _jobs[:-50]
+        _persist(job)
         if fingerprint:
             _fingerprints[fingerprint] = now
 

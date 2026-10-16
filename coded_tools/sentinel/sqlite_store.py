@@ -57,6 +57,11 @@ CREATE TABLE IF NOT EXISTS audit_events (
     details_json TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS audit_events_entity_idx ON audit_events(entity_type, entity_id, id);
+CREATE TABLE IF NOT EXISTS alert_jobs (
+    id TEXT PRIMARY KEY,
+    updated_at TEXT,
+    data_json TEXT NOT NULL
+);
 """
 
 
@@ -203,6 +208,23 @@ class SQLiteDatabase:
             raise
         finally:
             connection.close()
+
+    def save_alert_job(self, job: Dict[str, Any]) -> None:
+        """Upsert a webhook job so a UI running in another process can show it."""
+        with self.transaction() as connection:
+            connection.execute(
+                "INSERT INTO alert_jobs (id, updated_at, data_json) VALUES (?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at, data_json = excluded.data_json",
+                (job["id"], job.get("updated_at"), json.dumps(sanitize_record(job), ensure_ascii=False, default=str)),
+            )
+
+    def recent_alert_jobs(self, limit: int = 20) -> list[Dict[str, Any]]:
+        """Newest webhook jobs first."""
+        with self.connection() as connection:
+            rows = connection.execute(
+                "SELECT data_json FROM alert_jobs ORDER BY updated_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [json.loads(row[0]) for row in rows]
 
     def append_audit_event(
         self,

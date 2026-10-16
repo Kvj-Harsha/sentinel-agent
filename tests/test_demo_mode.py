@@ -80,3 +80,35 @@ def test_chatty_source_cannot_evict_deployment_evidence():
     logs = [r["record_id"] for r in kept if r["evidence_type"] == "log"]
     assert logs[0] == "log-0" and len(logs) == 8  # earliest log is always kept
     assert len([r for r in kept if r["evidence_type"] == "metric"]) == 8
+
+
+def test_final_report_is_built_from_verified_facts(monkeypatch, tmp_path):
+    from coded_tools.sentinel.finalize_incident import build_report  # pylint: disable=import-outside-toplevel
+
+    sly_data: dict = {}
+    args = {"service_name": "checkout-service", "starts_at": STARTS_AT}
+    LokiLogs().invoke(args, sly_data)
+    GithubDeployments().invoke({"service_name": "checkout-service"}, sly_data)
+    RunbookSearch().invoke({"query": "checkout-service NullPointerException tax library deploy"}, sly_data)
+    CorrelationCheck().invoke({"service_name": "checkout-service", "hypothesis": HYPOTHESIS}, sly_data)
+
+    report = build_report(sly_data)
+
+    assert "Correlation verdict: SUPPORTED" in report
+    assert "Runbook: RB-042" in report and "[fixture]" in report
+    assert "Deployments: 2 record(s), fixture" in report
+    assert "Metrics: no evidence published" in report  # not collected in this test: reported honestly, not invented
+
+
+def test_webhook_jobs_are_shared_through_sqlite(tmp_path):
+    """The UI and the webhook can be separate containers: completed jobs must be readable from the database."""
+    from coded_tools.sentinel.sqlite_store import SQLiteDatabase  # pylint: disable=import-outside-toplevel
+
+    database = SQLiteDatabase(tmp_path / "jobs.db", seed_legacy_data=False)
+    database.save_alert_job({"id": "job1", "state": "investigating", "updated_at": "2026-10-16T15:00:00+00:00"})
+    database.save_alert_job({"id": "job1", "state": "completed", "updated_at": "2026-10-16T15:01:00+00:00",
+                             "ticket_number": "INC1", "service": "checkout-service"})
+
+    jobs = database.recent_alert_jobs()
+
+    assert [(job["id"], job["state"], job["ticket_number"]) for job in jobs] == [("job1", "completed", "INC1")]

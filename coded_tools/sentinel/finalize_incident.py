@@ -15,6 +15,41 @@ from coded_tools.sentinel.update_ticket import UpdateTicket
 
 logger = logging.getLogger(__name__)
 
+_EVIDENCE_LABELS = (("log", "Logs"), ("metric", "Metrics"), ("deployment", "Deployments"),
+                    ("deployment_change", "Deployments"), ("runbook", "Runbooks"))
+
+
+def build_report(sly_data: Dict[str, Any]) -> str:
+    """
+    Renders the facts a human needs from tool-published data only, so the final answer cannot misstate the verdict,
+    the runbook, or whether a source was fixture or live (small models paraphrase these wrongly).
+    """
+    facts = sly_data.get("sentinel_verified") or {}
+    correlation = facts.get("correlation") or {}
+    ticket = TicketStore().get(sly_data.get("sentinel_ticket_number") or "") or {}
+    lines = [f"Ticket: {ticket.get('number', 'unknown')} ({ticket.get('state', 'unknown')})",
+             f"Correlation verdict: {correlation.get('verdict', 'unknown')} - {correlation.get('reasoning', '')}".strip()]
+    runbook = facts.get("runbook")
+    runbook_status = next((r.get("source_status") for r in facts.get("evidence") or [] if r.get("evidence_type") == "runbook"), None)
+    if runbook:
+        link = f" ({runbook['webui_link']})" if runbook.get("webui_link") else ""
+        lines.append(f"Runbook: {runbook['id']} - {runbook['title']}{link} [{runbook_status or 'unknown'}]")
+    else:
+        lines.append("Runbook: none matched")
+    hotfix = (facts.get("memory") or {}).get("suggested_hotfix")
+    lines.append(f"Suggested hotfix: {hotfix}" if hotfix else "Suggested hotfix: none on record")
+    grouped: Dict[str, Dict[str, Any]] = {}
+    for record in facts.get("evidence") or []:
+        label = dict(_EVIDENCE_LABELS).get(record.get("evidence_type"))
+        if label:
+            entry = grouped.setdefault(label, {"count": 0, "status": set()})
+            entry["count"] += 1
+            entry["status"].add(record.get("source_status", "unknown"))
+    for label in ("Logs", "Metrics", "Deployments", "Runbooks"):
+        entry = grouped.get(label)
+        lines.append(f"{label}: {entry['count']} record(s), {'/'.join(sorted(entry['status']))}" if entry else f"{label}: no evidence published")
+    return "\n".join(lines)
+
 
 class FinalizeIncident(CodedTool):
     """
@@ -78,6 +113,7 @@ class FinalizeIncident(CodedTool):
                 )
             outcome["repair_proposed"] = bool(remediation)
             outcome["preflight_passed"] = bool(remediation.get("all_passed"))
+        outcome["report"] = build_report(sly_data)
         outcome["summary"] = (
             "Incident recorded. "
             + ("Repair proposal prepared; a human must review and merge the PR." if outcome["repair_proposed"]

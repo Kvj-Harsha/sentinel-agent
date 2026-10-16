@@ -30,7 +30,7 @@ DATA_FILE = Path(__file__).parent / "data" / "deploys.json"
 class DeployLookup(CodedTool):
     """
     Looks up recent deployment/change history for a given service.
-    Backed entirely by a small synthetic dataset (backend/coded_tools/sentinel/data/deploys.json) --
+    Backed entirely by a small synthetic dataset (coded_tools/sentinel/data/deploys.json) --
     no real deployment records or credentials are involved.
     """
 

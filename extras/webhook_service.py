@@ -7,8 +7,9 @@ import sys
 import threading
 from pathlib import Path
 
-BACKEND_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(BACKEND_DIR))
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(REPO_ROOT / "apps" / "sentinel"))
 
 from alertmanager_receiver import receiver_status  # noqa: E402
 from alertmanager_receiver import start_receiver  # noqa: E402

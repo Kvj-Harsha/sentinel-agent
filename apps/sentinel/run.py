@@ -2,8 +2,8 @@
 Backend entry point for Sentinel.
 
 Runs the neuro-san agent network in-process (no separate server needed) and exposes one function,
-invoke_agent(). Used by the Streamlit frontend (frontend/run.py), the alert CLI (backend/alerts.py)
-and, directly, by `python backend/run.py` for a headless smoke test.
+invoke_agent(). Used by the Streamlit app (apps/sentinel/ui.py), the alert CLI (apps/sentinel/alerts.py)
+and, directly, by `python apps/sentinel/run.py` for a headless smoke test.
 """
 
 import os
@@ -15,8 +15,8 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
-BACKEND_DIR = Path(__file__).resolve().parent
-REPO_ROOT = BACKEND_DIR.parent
+APP_DIR = Path(__file__).resolve().parent
+REPO_ROOT = APP_DIR.parent.parent
 AGENT_NAME = "sentinel"
 
 # Secrets (OPENAI_API_KEY, ...) come from <repo>/.env; neuro-san itself does not load it.
@@ -27,22 +27,23 @@ load_dotenv(REPO_ROOT / ".env")
 if "openrouter.ai" in os.environ.get("OPENAI_API_BASE", "").lower():
     os.environ.setdefault("OPENROUTER_API_KEY", os.environ.get("OPENAI_API_KEY", ""))
 
-# HOCON `include "backend/registries/..."` paths are resolved against the working directory, so
+# HOCON `include "registries/..."` paths are resolved against the working directory, so
 # always run from the repository root no matter where the process was started.
 os.chdir(REPO_ROOT)
 
-os.environ["AGENT_MANIFEST_FILE"] = str(BACKEND_DIR / "registries" / "manifest.hocon")
-os.environ["AGENT_TOOL_PATH"] = str(BACKEND_DIR / "coded_tools")
+os.environ["AGENT_MANIFEST_FILE"] = str(REPO_ROOT / "registries" / "manifest.hocon")
+os.environ["AGENT_TOOL_PATH"] = str(REPO_ROOT / "coded_tools")
 
 # neuro-san maps AGENT_TOOL_PATH to a dotted module path using PYTHONPATH, and imports
-# `coded_tools.sentinel.*` through sys.path, so the backend directory must be on both.
+# `coded_tools.sentinel.*` through sys.path, so the repository root must be on both.
 _existing_pythonpath = os.environ.get("PYTHONPATH", "")
-if str(BACKEND_DIR) not in _existing_pythonpath.split(os.pathsep):
+if str(REPO_ROOT) not in _existing_pythonpath.split(os.pathsep):
     os.environ["PYTHONPATH"] = (
-        f"{BACKEND_DIR}{os.pathsep}{_existing_pythonpath}" if _existing_pythonpath else str(BACKEND_DIR)
+        f"{REPO_ROOT}{os.pathsep}{_existing_pythonpath}" if _existing_pythonpath else str(REPO_ROOT)
     )
-if str(BACKEND_DIR) not in sys.path:
-    sys.path.insert(0, str(BACKEND_DIR))
+for _path in (str(REPO_ROOT), str(APP_DIR)):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
 
 # pylint: disable=wrong-import-position
 from neuro_san.client.agent_session_factory import DirectAgentSessionFactory  # noqa: E402

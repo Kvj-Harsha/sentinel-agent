@@ -42,7 +42,7 @@ QUERY_STOPWORDS = frozenset(
 class LogsLookup(CodedTool):
     """
     Looks up error/anomaly log entries for a given service, optionally filtered by keywords.
-    Backed entirely by a small synthetic dataset (backend/coded_tools/sentinel/data/logs.json) --
+    Backed entirely by a small synthetic dataset (coded_tools/sentinel/data/logs.json) --
     no real production logs or PII are involved.
     """
 

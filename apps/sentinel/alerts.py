@@ -6,8 +6,8 @@ outage; an alert arrives as structured data (service, host, symptom, timestamp) 
 such as Datadog. This module accepts exactly that shape and deterministically (plain Python, no LLM)
 composes the incident report the agent network then triages.
 
-Run with:  python backend/alerts.py --preset checkout-500
-      or:  python backend/alerts.py --payload path/to/alert.json
+Run with:  python apps/sentinel/alerts.py --preset checkout-500
+      or:  python apps/sentinel/alerts.py --payload path/to/alert.json
 """
 
 import argparse
@@ -24,7 +24,7 @@ SAMPLE_ALERTS_DIR = Path(__file__).resolve().parent / "sample_alerts"
 
 
 def list_presets() -> List[str]:
-    """:return: the names of the built-in sample alerts (files under backend/sample_alerts/)."""
+    """:return: the names of the built-in sample alerts (files under apps/sentinel/sample_alerts/)."""
     return sorted(path.stem for path in SAMPLE_ALERTS_DIR.glob("*.json"))
 
 
@@ -143,7 +143,7 @@ def main() -> None:
     make_stdout_safe()
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--preset", choices=list_presets(), help="Built-in sample alert (backend/sample_alerts/).")
+    group.add_argument("--preset", choices=list_presets(), help="Built-in sample alert (apps/sentinel/sample_alerts/).")
     group.add_argument("--payload", help="Path to a custom Datadog-monitor-alert-shaped JSON file.")
     args = parser.parse_args()
 

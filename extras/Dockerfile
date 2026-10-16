@@ -20,6 +20,6 @@ USER 10001:10001
 EXPOSE 8501 8090
 
 HEALTHCHECK --interval=20s --timeout=4s --start-period=45s --retries=3 \
-    CMD ["python", "ops/healthcheck.py", "ui"]
+    CMD ["python", "extras/ops/healthcheck.py", "ui"]
 
-ENTRYPOINT ["streamlit", "run", "frontend/run.py", "--server.address=0.0.0.0", "--server.port=8501", "--server.headless=true", "--browser.gatherUsageStats=false"]
+ENTRYPOINT ["streamlit", "run", "apps/sentinel/ui.py", "--server.address=0.0.0.0", "--server.port=8501", "--server.headless=true", "--browser.gatherUsageStats=false"]

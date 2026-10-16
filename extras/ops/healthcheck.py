@@ -22,7 +22,7 @@ url = "http://127.0.0.1:8501/_stcore/health" if target == "ui" else "http://127.
 if not is_healthy(url):
     raise SystemExit(1)
 if target == "ui":
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     from coded_tools.sentinel.sqlite_store import SQLiteDatabase  # noqa: E402
 
     SQLiteDatabase().initialize()

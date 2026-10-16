@@ -1,3 +1,5 @@
+name: sentinel-agent
+
 services:
   alloy:
     image: sentinel-alloy:v1.20.1

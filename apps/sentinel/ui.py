@@ -12,8 +12,9 @@ from urllib.parse import urlparse
 
 import requests
 
-# backend/run.py sets up the environment (.env, working directory, neuro-san paths); make it importable.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
+# run.py (next to this file) sets up the environment (.env, working directory, neuro-san paths).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import streamlit as st  # noqa: E402  pylint: disable=wrong-import-position
 from alerts import compose_incident_report  # noqa: E402  pylint: disable=wrong-import-position

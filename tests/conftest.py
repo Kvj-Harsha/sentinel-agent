@@ -1,4 +1,4 @@
-"""Makes backend/ importable so tests can use `coded_tools.sentinel.*` and `alerts` directly."""
+"""Makes the repo root and apps/sentinel importable so tests can use `coded_tools.sentinel.*` and `alerts`."""
 
 import sys
 import os
@@ -13,4 +13,5 @@ for _name in (
 os.environ["SENTINEL_OFFLINE_MODE"] = "true"
 os.environ["SENTINEL_STORAGE_BACKEND"] = "json"
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "apps" / "sentinel"))

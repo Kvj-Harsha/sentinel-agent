@@ -40,7 +40,7 @@ class GithubDeployLookup(CodedTool):
     independently-verifiable external source instead of a local synthetic fixture, which is
     the point: a judge can click the returned url and see the actual commit.
 
-    Falls back to a pre-captured local snapshot (backend/coded_tools/sentinel/data/github_deploys_cache.json)
+    Falls back to a pre-captured local snapshot (coded_tools/sentinel/data/github_deploys_cache.json)
     on any network error, timeout, or non-200 response, so a live demo never breaks on
     connectivity or GitHub's unauthenticated rate limit (60 requests/hour).
     """

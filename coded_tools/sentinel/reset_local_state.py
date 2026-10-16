@@ -12,9 +12,8 @@ import sys
 
 from dotenv import load_dotenv
 
-BACKEND_DIR = Path(__file__).resolve().parents[2]
-REPO_ROOT = BACKEND_DIR.parent
-sys.path.insert(0, str(BACKEND_DIR))
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT))
 os.chdir(REPO_ROOT)
 load_dotenv(REPO_ROOT / ".env")
 

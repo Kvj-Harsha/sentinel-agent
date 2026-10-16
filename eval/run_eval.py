@@ -37,8 +37,7 @@ from dotenv import load_dotenv
 logger = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-BACKEND_DIR = REPO_ROOT / "backend"
-DATA_DIR = BACKEND_DIR / "coded_tools" / "sentinel" / "data"
+DATA_DIR = REPO_ROOT / "coded_tools" / "sentinel" / "data"
 RUNTIME_STATE_FILES = [DATA_DIR / "tickets.json", DATA_DIR / "incident_history.json"]
 NETWORK_NAME = "sentinel"
 SCENARIO_TIMEOUT_SECONDS = 240
@@ -141,9 +140,9 @@ class EvalRunner:
             "SENTINEL_DEMO_GITHUB_REPO": "",
             "PROMETHEUS_URL": "",
             "LOKI_URL": "",
-            "AGENT_MANIFEST_FILE": str(BACKEND_DIR / "registries" / "manifest.hocon"),
-            "AGENT_TOOL_PATH": str(BACKEND_DIR / "coded_tools"),
-            "PYTHONPATH": os.pathsep.join(filter(None, [str(BACKEND_DIR), os.environ.get("PYTHONPATH", "")])),
+            "AGENT_MANIFEST_FILE": str(REPO_ROOT / "registries" / "manifest.hocon"),
+            "AGENT_TOOL_PATH": str(REPO_ROOT / "coded_tools"),
+            "PYTHONPATH": os.pathsep.join(filter(None, [str(REPO_ROOT), os.environ.get("PYTHONPATH", "")])),
         }
         try:
             completed = subprocess.run(

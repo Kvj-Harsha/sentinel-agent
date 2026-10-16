@@ -9,8 +9,8 @@ __pycache__
 .env.*
 !.env.example
 .secrets
-backend/coded_tools/sentinel/data/*.db
-backend/coded_tools/sentinel/data/*.db-*
-backend/coded_tools/sentinel/data/.reset-backups
+coded_tools/sentinel/data/*.db
+coded_tools/sentinel/data/*.db-*
+coded_tools/sentinel/data/.reset-backups
 eval/_reports
 eval/_thinking

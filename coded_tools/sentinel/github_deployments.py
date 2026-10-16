@@ -16,6 +16,7 @@ import requests
 from neuro_san.interfaces.coded_tool import CodedTool
 
 from coded_tools.sentinel.deploy_lookup import DeployLookup
+from coded_tools.sentinel.incident_context import trusted_value
 from coded_tools.sentinel.mode import demo_mode
 
 from coded_tools.sentinel.schemas import EvidenceRecord
@@ -53,7 +54,7 @@ class GithubDeployments(CodedTool):
         if service_name != CHECKOUT_SERVICE:
             return unavailable_result(SOURCE, f"No GitHub repository mapping is configured for service '{service_name or 'unknown'}'.")
 
-        environment = str(args.get("environment") or os.environ.get(
+        environment = str(trusted_value(sly_data, "environment", args.get("environment")) or os.environ.get(
             "SENTINEL_GITHUB_DEPLOYMENT_ENVIRONMENT", DEFAULT_ENVIRONMENT
         )).strip()
         if not environment or len(environment) > 100 or re.search(r"[\x00-\x1f\x7f]", environment):

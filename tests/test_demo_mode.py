@@ -112,3 +112,32 @@ def test_webhook_jobs_are_shared_through_sqlite(tmp_path):
     jobs = database.recent_alert_jobs()
 
     assert [(job["id"], job["state"], job["ticket_number"]) for job in jobs] == [("job1", "completed", "INC1")]
+
+
+def test_alert_time_comes_from_the_alert_not_from_the_model(monkeypatch):
+    """A model that invents starts_at must not redirect the evidence query."""
+    from coded_tools.sentinel.incident_context import seed_incident_context  # pylint: disable=import-outside-toplevel
+
+    monkeypatch.setenv("SENTINEL_MODE", "live")
+    sly_data: dict = {}
+    seed_incident_context(
+        "[Triggered] High 5xx. Affected service: checkout-service. Environment: demo. (host: x, alert fired at 2026-10-16T14:47:09.502Z)",
+        sly_data,
+    )
+    assert sly_data["sentinel_incident"] == {"starts_at": "2026-10-16T14:47:09.502Z", "environment": "demo"}
+
+    seen = {}
+
+    class FakeClient:
+        base_url = "http://loki.invalid"
+
+        def query_range(self, _query, start_ns, end_ns, _limit):
+            seen["start"], seen["end"] = start_ns, end_ns
+            return []
+
+    monkeypatch.setattr("coded_tools.sentinel.loki_logs.LokiClient", FakeClient)
+    LokiLogs().invoke({"service_name": "checkout-service", "starts_at": "2023-11-01T12:00:00Z"}, sly_data)
+
+    from datetime import datetime, timezone  # pylint: disable=import-outside-toplevel
+    expected = datetime(2026, 10, 16, 14, 42, 9, 502000, tzinfo=timezone.utc)
+    assert seen["start"] == int(expected.timestamp() * 1_000_000_000)

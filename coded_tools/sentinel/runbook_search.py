@@ -42,6 +42,20 @@ TITLE_STOPWORDS = frozenset(
 )
 
 
+# Alerts say "5xx"; runbooks are titled by symptom ("API Service Unavailable"). Expand the status class into the
+# plain-language symptoms so a vague agent-written query still finds the right page.
+SYMPTOM_SYNONYMS = {
+    "5xx": "server error service unavailable api",
+    "503": "service unavailable",
+    "500": "internal server error",
+}
+
+
+def _expand_symptoms(query: str) -> str:
+    extra = [words for key, words in SYMPTOM_SYNONYMS.items() if key in query]
+    return f"{query} {' '.join(extra)}" if extra else query
+
+
 class RunbookSearch(CodedTool):
     """
     Finds the most relevant past runbook/postmortem for a free-text incident description,
@@ -82,6 +96,7 @@ class RunbookSearch(CodedTool):
             source = "fixture:runbooks.json"
             source_status = SourceStatus.FIXTURE
 
+        query = _expand_symptoms(query)
         query_tokens = set(query.replace("-", " ").split()) - TITLE_STOPWORDS
 
         scored = []

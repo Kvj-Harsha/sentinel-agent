@@ -13,6 +13,7 @@ from urllib.parse import urlencode
 
 from neuro_san.interfaces.coded_tool import CodedTool
 
+from coded_tools.sentinel.incident_context import trusted_value
 from coded_tools.sentinel.mode import demo_mode
 from coded_tools.sentinel.prometheus_client import PrometheusClient
 from coded_tools.sentinel.prometheus_client import PrometheusError
@@ -57,7 +58,7 @@ class PrometheusMetrics(CodedTool):
         if not promql:
             return unavailable_result(source, f"No Prometheus metric query is configured for service '{service_name or 'unknown'}'.")
         try:
-            incident_time = _parse_time(args.get("starts_at"))
+            incident_time = _parse_time(trusted_value(sly_data, "starts_at", args.get("starts_at")))
         except (TypeError, ValueError, OverflowError):
             return unavailable_result(source, "Could not query metrics: supply the alert's exact timezone-aware startsAt timestamp.")
 

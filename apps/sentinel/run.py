@@ -48,6 +48,8 @@ for _path in (str(REPO_ROOT), str(APP_DIR)):
 # pylint: disable=wrong-import-position
 from neuro_san.client.agent_session_factory import DirectAgentSessionFactory  # noqa: E402
 
+from coded_tools.sentinel.finalize_incident import build_report  # noqa: E402
+from coded_tools.sentinel.incident_context import seed_incident_context  # noqa: E402
 from coded_tools.sentinel.schemas import sanitize_record  # noqa: E402
 
 # pylint: enable=wrong-import-position
@@ -73,7 +75,9 @@ def invoke_agent(
     factory = DirectAgentSessionFactory()
     session = factory.create_session(agent_name=agent_name, use_direct=True, metadata={})
 
-    request_payload: Dict[str, Any] = {"user_message": {"text": user_text}, "sly_data": sly_data or {}}
+    sly_data = dict(sly_data or {})
+    seed_incident_context(user_text, sly_data)
+    request_payload: Dict[str, Any] = {"user_message": {"text": user_text}, "sly_data": sly_data}
     if chat_context:
         request_payload["chat_context"] = chat_context
 
@@ -83,7 +87,24 @@ def invoke_agent(
             last_message = chat_msg
         if chat_msg.get("done") is True:
             break
-    return last_message.get("response", {})
+    response = last_message.get("response", {})
+    _prepend_verified_report(response)
+    return response
+
+
+def _prepend_verified_report(response: Dict[str, Any]) -> None:
+    """
+    Put the tool-built report ahead of the model's narrative. A small model may reword or contradict the verdict,
+    runbook or source labels; the report is rendered by code from verified facts, so it is authoritative.
+    """
+    sly_data = response.get("sly_data")
+    if not isinstance(sly_data, dict) or not (sly_data.get("sentinel_verified") or {}).get("correlation"):
+        return
+    report = "\n".join(f"- {line}" for line in build_report(sly_data).splitlines())
+    response["text"] = (
+        f"**Verified by tools**\n{report}\n\n---\n*Agent narrative (the lines above are authoritative):*\n\n"
+        f"{response.get('text', '')}"
+    )
 
 
 def format_verified_facts(sly_data: Optional[Dict[str, Any]]) -> str:

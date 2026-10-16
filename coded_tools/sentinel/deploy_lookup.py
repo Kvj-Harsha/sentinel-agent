@@ -45,9 +45,11 @@ class DeployLookup(CodedTool):
         """
         service_name: str = canonical_service_name(args.get("service_name") or "")
         environment: str = str(args.get("environment") or "").strip()
+        if args.get("replay"):
+            environment = ""  # the replay scenario ships demo-environment records for an alert labelled prod
         if not service_name:
             return unavailable_result("fixture:deploys.json", "Please provide a service_name to look up deploy history for.")
-        if service_name == "checkout-service":
+        if service_name == "checkout-service" and not args.get("replay"):
             return unavailable_result(
                 "fixture:deploys.json",
                 "Fixture deployment fallback is disabled for checkout-service; use github_deployments.",

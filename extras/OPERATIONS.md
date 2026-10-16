@@ -16,8 +16,8 @@ single-machine demo. It does not provide production TLS termination, multi-host 
 From the repository root, start the app and monitoring services together:
 
 ```powershell
-docker compose -f docker-compose.alerting.yml -f docker-compose.app.yml up -d --build
-docker compose -f docker-compose.alerting.yml -f docker-compose.app.yml ps
+docker compose -f extras/docker-compose.alerting.yml -f extras/docker-compose.app.yml up -d --build
+docker compose -f extras/docker-compose.alerting.yml -f extras/docker-compose.app.yml ps
 ```
 
 The UI publishes only `127.0.0.1:8501`. The receiver has no host-published port; Alertmanager reaches it over the
@@ -30,7 +30,7 @@ endpoint. The receiver accepts at most four investigations concurrently; when fu
 Stop containers without deleting their data volumes:
 
 ```powershell
-docker compose -f docker-compose.alerting.yml -f docker-compose.app.yml down
+docker compose -f extras/docker-compose.alerting.yml -f extras/docker-compose.app.yml down
 ```
 
 The named SQLite, Prometheus, Loki, Alloy, and Alertmanager secret volumes persist. Do not add `-v` unless you intend
@@ -47,7 +47,7 @@ Before resetting or removing volumes, stop all writers and export the persistent
 directory. For example, set `$backupPath` to a private absolute directory, then use a short-lived helper container:
 
 ```powershell
-docker compose -f docker-compose.alerting.yml -f docker-compose.app.yml stop sentinel sentinel-webhook alertmanager
+docker compose -f extras/docker-compose.alerting.yml -f extras/docker-compose.app.yml stop sentinel sentinel-webhook alertmanager
 $backupPath = (New-Item -ItemType Directory -Force .\backups).FullName
 docker run --rm --mount type=volume,source=sentinel-agent_sentinel-data,target=/source,readonly --mount "type=bind,source=$backupPath,target=/backup" alpine:3.20 sh -c 'tar -czf /backup/sentinel-data.tgz -C /source .'
 ```
@@ -61,7 +61,7 @@ For a logical local reset while retaining a pre-reset backup in the SQLite volum
 the app and webhook are stopped:
 
 ```powershell
-docker compose -f docker-compose.alerting.yml -f docker-compose.app.yml run --rm --no-deps --entrypoint python sentinel backend/coded_tools/sentinel/reset_local_state.py --yes --database-only
+docker compose -f extras/docker-compose.alerting.yml -f extras/docker-compose.app.yml run --rm --no-deps --entrypoint python sentinel coded_tools/sentinel/reset_local_state.py --yes --database-only
 ```
 
 The container's database-only reset preserves the read-only legacy JSON fixtures. It makes no provider API calls.
@@ -71,7 +71,7 @@ The container's database-only reset preserves the read-only legacy JSON fixtures
 To stop new investigations and writes, stop Alertmanager and both Sentinel processes:
 
 ```powershell
-docker compose -f docker-compose.alerting.yml -f docker-compose.app.yml stop alertmanager sentinel-webhook sentinel
+docker compose -f extras/docker-compose.alerting.yml -f extras/docker-compose.app.yml stop alertmanager sentinel-webhook sentinel
 ```
 
 To leave the UI available while disabling provider writes, set `SERVICENOW_ENABLED=false`, remove

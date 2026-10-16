@@ -14,12 +14,12 @@
 Stop Sentinel first, then run this from the repository root:
 
 ```powershell
-python backend/coded_tools/sentinel/reset_local_state.py --yes
+python coded_tools/sentinel/reset_local_state.py --yes
 ```
 
-The script backs up the SQLite database and legacy ticket/history JSON under `backend/coded_tools/sentinel/data/.reset-backups/`, clears local tickets, incident memory, audit events, and legacy JSON, and makes no external API calls. Backups contain the same sensitive incident data; delete the backup directory when it is no longer needed. Resetting monitoring volumes is separate and destructive; inspect the Docker volumes before removing them.
+The script backs up the SQLite database and legacy ticket/history JSON under `coded_tools/sentinel/data/.reset-backups/`, clears local tickets, incident memory, audit events, and legacy JSON, and makes no external API calls. Backups contain the same sensitive incident data; delete the backup directory when it is no longer needed. Resetting monitoring volumes is separate and destructive; inspect the Docker volumes before removing them.
 
-To preserve records while applying the expanded PII/credential scrub to legacy JSON, run `python backend/coded_tools/sentinel/scrub_local_state.py --yes` instead. It takes a pre-scrub backup first. Stop Sentinel before either maintenance command.
+To preserve records while applying the expanded PII/credential scrub to legacy JSON, run `python coded_tools/sentinel/scrub_local_state.py --yes` instead. It takes a pre-scrub backup first. Stop Sentinel before either maintenance command.
 
 ## Credential boundaries
 

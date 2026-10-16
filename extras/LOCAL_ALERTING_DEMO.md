@@ -40,8 +40,8 @@ docker rm sentinel-alertmanager-secret-init
 Keep the named volume when restarting the stack. Then, in PowerShell from the Sentinel repository:
 
 ```powershell
-docker compose -f docker-compose.alerting.yml up -d
-streamlit run frontend/run.py --server.port 8501
+docker compose -f extras/docker-compose.alerting.yml up -d
+streamlit run apps/sentinel/ui.py --server.port 8501
 ```
 
 In a second terminal, start the checkout app:
@@ -54,8 +54,8 @@ docker compose up -d --build
 From the Sentinel repository, start the local log store and collector:
 
 ```powershell
-docker compose -f docker-compose.loki.yml up -d
-docker compose -f docker-compose.alloy.yml up -d
+docker compose -f extras/docker-compose.loki.yml up -d
+docker compose -f extras/docker-compose.alloy.yml up -d
 ```
 
 Grafana Alloy reads Docker logs through the local Docker socket and filters discovery to the `checkout-demo`
@@ -130,11 +130,11 @@ Sentinel's repository:
 docker compose down
 
 # From the Sentinel repository
-docker compose -f docker-compose.alerting.yml down
+docker compose -f extras/docker-compose.alerting.yml down
 
 # From the Sentinel repository
-docker compose -f docker-compose.loki.yml down
-docker compose -f docker-compose.alloy.yml down
+docker compose -f extras/docker-compose.loki.yml down
+docker compose -f extras/docker-compose.alloy.yml down
 ```
 
 Stop Streamlit with `Ctrl+C`. If these services were already running before the demo, leave them running and do not

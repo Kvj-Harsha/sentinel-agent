@@ -24,6 +24,7 @@ from coded_tools.sentinel.schemas import utc_now
 from coded_tools.sentinel.verified_facts import publish
 from coded_tools.sentinel.verified_facts import publish_evidence
 from coded_tools.sentinel.confluence_runbooks import ConfluenceRunbooks
+from coded_tools.sentinel.mode import demo_mode
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,7 @@ class RunbookSearch(CodedTool):
             return unavailable_result("fixture:runbooks.json", "Please provide an incident query to search runbooks for.")
 
         confluence = ConfluenceRunbooks()
-        if confluence.requested:
+        if confluence.requested and not demo_mode():
             if not confluence.configured:
                 return unavailable_result("confluence", "Confluence is partially configured; set the account email and explicit space key(s) in .env.")
             try:

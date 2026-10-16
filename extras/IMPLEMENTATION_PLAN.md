@@ -1,3 +1,5 @@
+> **Archived.** This was the original enterprise roadmap; paths below predate the restructure (backend/ -> registries/, coded_tools/, apps/sentinel/, extras/). See ../docs/ARCHITECTURE.md for the current design.
+
 # Sentinel: Incremental Architecture and Integration Plan
 
 ## 1. Purpose

@@ -13,7 +13,6 @@ from alerts import list_presets
 from alerts import load_preset
 from coded_tools.sentinel.correlation_check import CorrelationCheck
 from coded_tools.sentinel.deploy_lookup import DeployLookup
-from coded_tools.sentinel.github_deploy_lookup import GithubDeployLookup
 from coded_tools.sentinel.incident_memory_store import IncidentMemoryStore
 from coded_tools.sentinel.logs_lookup import LogsLookup
 from coded_tools.sentinel.open_ticket import OpenTicket
@@ -161,29 +160,6 @@ def test_ticket_lifecycle_is_idempotent_per_conversation(tmp_path: Path) -> None
 
     missing = UpdateTicket(store=store).invoke({"number": "INC9999999", "work_note": "x"}, {})
     assert isinstance(missing, str) and missing.startswith("Error:")
-
-
-def test_github_lookup_falls_back_to_offline_cache(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Any network failure -> the cached snapshot, so a live demo never breaks on connectivity."""
-    monkeypatch.setenv("SENTINEL_OFFLINE_MODE", "false")
-
-    def _offline(*_args: object, **_kwargs: object) -> None:
-        raise requests.exceptions.ConnectionError("offline")
-
-    monkeypatch.setattr(requests, "get", _offline)
-    result = GithubDeployLookup().invoke({"service_name": "sentinel-agent"}, {})
-    assert result["matches"][0]["version"] == "cache-fallback"
-
-    wrong = GithubDeployLookup().invoke({"service_name": "checkout-service"}, {})
-    assert isinstance(wrong, str) and wrong.startswith("Error:")
-
-
-def test_github_lookup_offline_mode_never_attempts_a_request(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The default offline test/eval mode reads only the checked-in cache."""
-    monkeypatch.setenv("SENTINEL_OFFLINE_MODE", "true")
-    monkeypatch.setattr(GithubDeployLookup, "_fetch_live", staticmethod(lambda: pytest.fail("network fetch attempted")))
-    result = GithubDeployLookup().invoke({"service_name": "sentinel-agent"}, {})
-    assert result["source_status"] in {"cache", "unavailable"}
 
 
 def test_alert_presets_compose_a_report_naming_the_service() -> None:
@@ -382,3 +358,15 @@ def test_remediation_refuses_without_verified_cause_and_blocks_on_failed_check(t
     result = RemediationPipeline(plan_file).invoke({"service_name": "checkout-service"}, _verified())
     assert not result["all_passed"]
     assert [c["name"] for c in result["checks"] if c["status"] == "failed"] == ["Dependency audit"]
+
+
+def test_hotfix_is_suggested_only_from_a_verified_incident(tmp_path: Path) -> None:
+    """A recurring NOT_SUPPORTED history is a dead end, not a 'known fix'."""
+    store = IncidentMemoryStore(data_file=tmp_path / "history.json")
+    for index in range(2):
+        RecordIncident(store=store).invoke(
+            {"service_name": "checkout-service", "hypothesis": "The checkout-service deploy caused errors.",
+             "verdict": "NOT_SUPPORTED", "runbook_id": "RB-042", "summary": f"Dead end {index}."},
+            {},
+        )
+    assert RecallIncidents(store=store).invoke({"service_name": "checkout-service"}, {})["suggested_hotfix"] is None

@@ -11,6 +11,8 @@ for _name in (
 ):
     os.environ[_name] = ""
 os.environ["SENTINEL_OFFLINE_MODE"] = "true"
+# Existing adapter tests exercise the live connectors with mocked HTTP; demo-mode tests opt back in explicitly.
+os.environ["SENTINEL_MODE"] = "live"
 os.environ["SENTINEL_STORAGE_BACKEND"] = "json"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))

@@ -1,348 +1,167 @@
-
-# Sentinel: a multi-agent incident-triage network built for the Neuro-SAN Agentic AI Hackathon.
+# Sentinel: a multi-agent incident-triage network for the Neuro-SAN hackathon.
 #
-# Incident Commander (front man, PII-guardrailed) fans a reported incident out to a Historian
-# (recalls/records persistent incident memory, and now suggests a known hotfix rather than just
-# noting recurrence), a TicketAgent (opens/updates a ServiceNow-style incident ticket -- the
-# ticket, not a chat transcript, is the artifact a real on-call workflow revolves around), and
-# investigative specialists -- live Prometheus metrics, live Loki logs with explicit fixture fallback,
-# and Confluence-shaped Runbook search,
-# plus fixture deployment records or explicit GitHub deployment records for 'checkout-service'
-# (GitHub commits remain context only) -- then hands their findings to a Scribe agent, which
-# must run a correlation self-check (an evaluation loop) before it is allowed to present a
-# root-cause hypothesis with confidence. See architecture.md for the full architecture writeup.
+# IncidentCommander (front man, PII-guardrailed) delegates to evidence specialists (Logs, Metrics, DeployHistory,
+# Runbook), a Scribe that must run the deterministic `correlation_check` before any root cause is stated, and a
+# Responder that owns the ticket, incident memory and the bounded repair proposal.
 #
-# Incidents are meant to arrive as a structured, Datadog-alert-shaped payload that
-# backend/alerts.py deterministically turns into an incident report (the Streamlit sidebar
-# and `python backend/alerts.py` both use it) rather than a hand-typed chat prompt.
+# Principle: the LLMs route and explain; coded tools decide. Every tool labels its evidence `fixture` or `live`.
+# SENTINEL_MODE=demo (default) replays a bundled scenario so the demo is reproducible offline; SENTINEL_MODE=live
+# switches Prometheus, Loki, GitHub Deployments and Confluence on. See docs/ARCHITECTURE.md.
 #
-# Current source boundaries: ordinary deploys, Confluence-shaped runbooks, incident memory,
-# and local tickets use JSON fixtures/stores under backend/coded_tools/sentinel/data/.
-# LogsAgent queries local Loki; JSON log fixtures are used only when explicitly enabled.
-# MetricsAgent queries the read-only Prometheus API when configured/reachable.
-# github_deployments reads explicit GitHub Deployment records for checkout-service and never
-# infers deployment from commits or build runs. Tickets may additionally mirror to a real
-# ServiceNow instance when configured. The demo GitHub PR workflow is a separate optional path.
-#
-# NOTE: `include` paths are resolved against the process working directory, so the app must
-# run from the repository root (backend/run.py does os.chdir to it automatically).
+# NOTE: `include` paths resolve against the process working directory, i.e. the repository root.
 
-include "backend/registries/aaosa_basic.hocon"
-include "backend/registries/expertise_scoping_instructions.hocon"
+include "registries/aaosa_basic.hocon"
+include "registries/expertise_scoping_instructions.hocon"
+include "registries/llm_config.hocon"
 
-include "backend/registries/llm_config.hocon"
-
-# Bound every network: a stuck correlation/verification loop must not run away.
-max_steps = 2000
-max_execution_seconds = 600
+# Bound every run so a stuck loop cannot run away.
+max_execution_seconds = 300
 
 metadata {
-    description =
-"""Multi-agent incident-response "Sentinel" that triages a production incident by
-correlating synthetic logs, deploy history, and past runbooks, then self-checks its
-root-cause hypothesis before presenting it."""
+    description = "Incident-triage network: gathers logs, metrics, deploy and runbook evidence, verifies the root-cause hypothesis with a deterministic check, opens a ticket and proposes a human-reviewed fix."
     tags = ["AAOSA", "tool", "incident-response", "evaluation-loop"]
     sample_queries = [
         "checkout-service is throwing 500 errors with NullPointerException on PaymentValidator.charge() since 14:02 UTC on 2026-10-12, what's going on?",
         "auth-service is returning 429s this morning, any idea why?",
         "inventory-service is timing out when querying warehouse_db, help me triage this.",
         "payments-gateway started throwing 504 timeouts calling fraud-check-service around 16:20 UTC on 2026-10-13, what happened?",
-        "search-service is timing out calling search-index-cluster since 10:15 UTC on 2026-10-13, can you triage this?",
-        "What were the most recent changes to the sentinel-agent project itself?",
     ]
 }
 
-this_is_not_a_game = """This is NOT a game. Do NOT pretend, call your tools. Do NOT make up log entries, deploys, or runbooks. Do NOT infer information you have not retrieved. Just call the relevant agent."""
+this_is_not_a_game = """This is NOT a game. Do NOT pretend, call your tools. Do NOT make up log entries, deploys, or runbooks. Do NOT infer information you have not retrieved."""
 
-exact_timestamp_rule = """CRITICAL: whenever you state or relay a timestamp (an incident/log timestamp or a deployed_at timestamp), you MUST copy the ISO-8601 string character-for-character exactly as it was returned by a tool or reported to you by another agent. Never paraphrase, round, shorten, re-derive, or guess a timestamp -- if you did not receive an exact timestamp string, say so instead of inventing one."""
+exact_values_rule = """CRITICAL: copy every timestamp and every service_name character-for-character from the alert or from a tool result. Never round, paraphrase, pluralize, normalize or guess them (e.g. 'payments-gateway' is never 'payment-gateway'). A tool call with a slightly wrong value silently finds no data."""
 
-exact_service_name_rule = """CRITICAL: whenever you pass a service_name argument to any tool, it MUST be copied character-for-character exactly as it appeared in the original incident report, or exactly as LogsAgent/DeployHistoryAgent reported it back (same spelling, same hyphenation, same singular/plural form). Never normalize, pluralize, depluralize, or otherwise rephrase a service name -- e.g. if the service is 'payments-gateway', never write 'payment-gateway' or 'payments gateway'. A tool call with a slightly-wrong service name will silently find no data, which is worse than not calling it at all."""
+evidence_rule = """Always preserve each result's source, source_status (fixture / live / unavailable), record IDs, event timestamps and links. If a source is unavailable or empty, say which; never present unavailable data as zero or fixture data as live."""
 
 tools = [
-    # Entry point: the Incident Commander.
     {
         name = "IncidentCommander"
         function {
             description = """Triages a reported production incident by coordinating specialist agents."""
         }
         instructions = ${expertise_scoping_instructions} """
-You are the Incident Commander of a "Sentinel" incident-triage system.
-When given an incident report (a service name, symptoms, error codes, and/or a timestamp):
-0. ALWAYS call the HistorianAgent FIRST to recall any prior recorded incidents for this
-   service, before anything else.
-0b. ALWAYS call the TicketAgent next to open EXACTLY ONE ticket for this incident, before
-    any investigation -- this is how a real on-call workflow starts: an alert fires, a
-    ticket opens, THEN the investigation happens. Call TicketAgent's open action only
-    this one time per incident -- never again later, even if you call TicketAgent again
-    to update it. The service_name you pass it MUST be the exact affected service named
-    in the original incident report (e.g. "checkout-service"), never a class/method name
-    or symptom detail mentioned alongside it (e.g. never "PaymentValidator"). Remember the
-    ticket number it returns; you will need it again at the end.
-1. ALWAYS call the LogsAgent to query the bounded live logs around the incident. Pass the exact
-   service_name and exact timezone-aware startsAt timestamp from the original alert as starts_at.
-   If the input has no exact alert time, have the tool report live evidence unavailable; do not
-   estimate a time or silently substitute fixture results.
-2. ALWAYS call the MetricsAgent using the exact service name and exact timezone-aware startsAt
-   timestamp from the original alert. If no exact timestamp was supplied, let the tool report
-   metrics as unavailable; never estimate one. Preserve its source status, query, sample times,
-   and peak rate, and do not describe unavailable data as zero.
-3. ALWAYS call the DeployHistoryAgent to check for recent deploys to the affected service.
-4. ALWAYS call the RunbookAgent to find the most relevant past runbook/postmortem.
-Call all four (1-4) before drawing any conclusion, even if you think you already know the answer.
-Once you have all results, call the Scribe agent with everything you gathered
-(service name, the incident/log timestamp, the live metric query and summary or its unavailable status,
-the candidate deploy and its timestamp,
-the runbook match, HistorianAgent's suggested_hotfix if one was returned, and your
-draft hypothesis) and ask it to produce the final, self-checked incident summary and
-recommended action. Your draft hypothesis MUST explicitly name the affected service
-verbatim (e.g. "The checkout-service deploy ...").
-If RunbookAgent found a matching runbook, you MUST pass its exact id, title,
-recommended_action and Confluence webui_link to the Scribe verbatim -- never drop,
-rename, summarize away, or omit a runbook match that was actually found. Only tell the Scribe "no runbook match" if
-RunbookAgent genuinely reported none.
-4. If (and only if) the Scribe reported the correlation check as SUPPORTED, call the
-RemediationAgent with the service_name. It proposes a config fix from the runbook and runs local
-preflight checks, posting each step to the ticket. Do not describe these as GitHub Actions checks or
-claim the running app has changed. Skip this step if the check was NOT_SUPPORTED.
-Before returning your answer, call the TicketAgent exactly once more to update (not
-re-open) the SAME ticket number from step 0b, with a work note summarizing the Scribe's
-finding and the remediation outcome. Keep its state "In Progress" while a repair PR awaits review.
-Only the Streamlit human-approval workflow may resolve it, after the PR is merged and recovery is
-verified. Your final answer to the user MUST state the ticket number.
-Return the Scribe's final summary (with the ticket number) to the user. If the Scribe's
-correlation check came back NOT_SUPPORTED, make sure that caveat is clearly visible in your
-answer rather than smoothing over it with false confidence.
-Your final answer to the user MUST contain these lines whenever the underlying data exists --
-never drop them while condensing:
-- "Ticket: <number> (<state>)".
-- "Suggested hotfix: <text>" copied verbatim from HistorianAgent's suggested_hotfix, whenever
-  HistorianAgent returned one (it already names the known fix and its runbook id).
-- "Runbook: <id> - <title>" plus, if RunbookAgent gave one, its Confluence webui_link copied
-  character-for-character as a relative path (never add or invent a domain or scheme).
-Also, right after updating the ticket and BEFORE you write your final answer, call the
-HistorianAgent once more to record this incident (service_name, your hypothesis, the
-correlation_check verdict, the runbook id if any, and a one-sentence summary) so future triages
-of this service can recall it. Do this before answering: your final answer ends the turn, so
-anything planned "after" it would never run. Do not mention recording in your final answer.
-""" ${this_is_not_a_game} "\n" ${exact_timestamp_rule} "\n" ${exact_service_name_rule} "\n" ${aaosa_instructions}
-        tools = ["HistorianAgent", "TicketAgent", "LogsAgent", "MetricsAgent", "DeployHistoryAgent", "RunbookAgent", "Scribe", "RemediationAgent"]
-        # sly_data is the framework's private control channel (never shown to the LLM). By
-        # default it is NOT returned to the caller; allowing these keys upstream lets the
-        # frontend carry the ticket number / incident session id into the next chat turn, so a
-        # follow-up question reuses the same ticket instead of opening a second one.
-        # `sentinel_verified` carries what the deterministic tools actually found (verdict,
-        # runbook, hotfix) so the UI can show it independent of the LLM's wording.
+You are the Incident Commander of Sentinel. For an incident report (service, symptoms, alert time):
+1. Ask the Responder to open exactly ONE ticket and recall prior incidents. Use the affected service named in the
+   report (e.g. "checkout-service"), never a class or method name. Keep the ticket number it returns.
+2. Ask LogsAgent, MetricsAgent, DeployHistoryAgent and RunbookAgent for evidence. Ask all four, in parallel when you
+   can, passing the exact service_name and the exact startsAt timestamp from the alert. If the alert has no exact time,
+   let the tools say evidence is unavailable; never estimate one.
+3. Give the Scribe your draft hypothesis (it MUST name the affected service verbatim) plus the evidence summaries and the
+   runbook match (exact id, title, recommended action and link). The Scribe runs the deterministic correlation check.
+4. Ask the Responder to finalize the incident, then answer. Never claim a repair was applied; a human must review and
+   merge the PR.
+Your final answer MUST include: "Ticket: <number> (<state>)"; the correlation verdict with its reasoning (state NOT_SUPPORTED
+plainly, never smooth it over); "Runbook: <id> - <title>" with its link verbatim if one was found; "Suggested hotfix: <text>"
+verbatim if the Responder returned one; and which evidence was fixture versus live.
+""" ${this_is_not_a_game} "\n" ${exact_values_rule} "\n" ${aaosa_instructions}
+        tools = ["Responder", "LogsAgent", "MetricsAgent", "DeployHistoryAgent", "RunbookAgent", "Scribe"]
+        # sly_data is the framework's private control channel and is not returned upstream by default. Allowing
+        # these keys lets the UI show the tool-verified facts and reuse the ticket on follow-up turns.
         allow {
             to_upstream {
                 sly_data = ["sentinel_ticket_number", "incident_session_id", "sentinel_verified", "sentinel_notes_posted"]
             }
         }
-        # Guardrail: incident reports are often raw copy-pasted log lines/stack traces,
-        # which can accidentally carry a customer's email or credit card number. Redact
-        # before the LLM (or any downstream agent) ever sees it.
+        # Guardrail: pasted logs can carry emails or card numbers; redact before any agent or LLM sees them.
         middleware = [
             {
                 class = "langchain.agents.middleware.PIIMiddleware"
-                args = {
-                    pii_type = "email"
-                    strategy = "redact"
-                    apply_to_input = true
-                    apply_to_output = true
-                }
+                args = { pii_type = "email", strategy = "redact", apply_to_input = true, apply_to_output = true }
             }
             {
                 class = "langchain.agents.middleware.PIIMiddleware"
-                args = {
-                    pii_type = "credit_card"
-                    strategy = "redact"
-                    apply_to_input = true
-                    apply_to_output = true
-                }
+                args = { pii_type = "credit_card", strategy = "redact", apply_to_input = true, apply_to_output = true }
             }
         ]
     }
     {
         name = "LogsAgent"
         function = ${aaosa_call}{
-            description = "Queries bounded checkout-service HTTP 5xx logs from local Grafana Loki; it can use the JSON fixture only when explicit fallback is enabled."
+            description = "Retrieves error-log evidence for a service around the alert time."
         }
-        instructions =
-"""
-Your job is to retrieve HTTP 5xx log evidence by calling loki_logs with the exact service_name
-and exact timezone-aware starts_at from the firing alert. Do not invent or round timestamps.
-Report the exact event timestamps, status codes, source status, bounded time window, and
-sanitized message excerpts. Preserve source_status, source, record_id, and source_url. If the
-tool reports unavailable or no matching logs, say which one happened; do not convert an outage
-into a no-results claim. Fixture data is returned only if SENTINEL_LOGS_FIXTURE_FALLBACK was
-explicitly enabled; label it as fixture evidence. Never repeat secrets, emails, payment data,
-or unredacted raw log lines.
-""" ${this_is_not_a_game} "\n" ${exact_timestamp_rule} "\n" ${exact_service_name_rule} "\n" ${aaosa_instructions}
+        instructions = """
+Call loki_logs once with the exact service_name and the exact timezone-aware starts_at from the alert. Report the exact
+event timestamps, status codes, a sanitized excerpt, and the source status. Retrieval only: never assert a root cause.
+Never repeat secrets, emails or payment data.
+""" ${this_is_not_a_game} "\n" ${exact_values_rule} "\n" ${evidence_rule} "\n" ${aaosa_instructions}
         tools = ["loki_logs"]
     }
     {
         name = "MetricsAgent"
         function = ${aaosa_call}{
-            description = "Queries bounded, live Prometheus checkout error-rate samples around the exact firing time; it does not use fixture metrics."
+            description = "Retrieves error-rate metric evidence for a service around the alert time."
         }
-        instructions =
-"""
-You retrieve metric evidence for the affected service using prometheus_metrics. Pass the exact
-service_name and the alert's exact timezone-aware startsAt timestamp as starts_at. Never round,
-estimate, or derive starts_at from prose. If the original report has no exact alert timestamp,
-call the tool with starts_at empty and report that live metrics could not be queried. Report the
-PromQL, query window, source_status, number of samples, and peak errors/second from its result.
-If the source is unavailable or has no samples, say so plainly; do not invent values or use
-fixture data. A metric trend is evidence of behavior, not proof of root cause.
-""" ${this_is_not_a_game} "\n" ${exact_timestamp_rule} "\n" ${exact_service_name_rule} "\n" ${aaosa_instructions}
+        instructions = """
+Call prometheus_metrics once with the exact service_name and the exact timezone-aware starts_at from the alert. Report the
+query, window, sample count, peak errors/second and source status. A metric trend is evidence of behavior, not proof of
+root cause.
+""" ${this_is_not_a_game} "\n" ${exact_values_rule} "\n" ${evidence_rule} "\n" ${aaosa_instructions}
         tools = ["prometheus_metrics"]
     }
     {
         name = "DeployHistoryAgent"
         function = ${aaosa_call}{
-            description = "Looks up recent deployment/change history for a service."
+            description = "Retrieves deployment evidence for a service."
         }
-        instructions =
-"""
-Your job is to find deployment evidence for the affected service. For 'checkout-service', call
-github_deployments and pass the incident's exact environment when it is known. This reads only
-explicit GitHub Deployment records and their statuses for the configured checkout repository.
-Only the latest status 'success' means the deployment completed; a workflow run, commit, or build
-is not a deployment. If GitHub returns no records, report live/empty evidence and do not fall back
-to fixture history. For other services, call deploy_lookup, which returns clearly labeled synthetic
-fixture records. The github_deploy_lookup tool is commit-history context only for 'sentinel-agent';
-never call it as a deployment source or use a commit author's timestamp in correlation. Always
-preserve source, source_status, environment, event time, state, record ID, and source link.
-""" ${this_is_not_a_game} "\n" ${exact_timestamp_rule} "\n" ${exact_service_name_rule} "\n" ${aaosa_instructions}
-        tools = ["deploy_lookup", "github_deploy_lookup", "github_deployments"]
-    }
-    {
-        name = "TicketAgent"
-        function = ${aaosa_call}{
-            description =
-"""ServiceNow-style ticketing agent: opens an incident ticket when triage starts and
-updates/resolves it once the Scribe has a finding. Always returns the ticket number."""
-        }
-        instructions =
-"""
-You manage Sentinel incident tickets. open_ticket always stores a local ticket and may also
-mirror it to ServiceNow when a ServiceNow instance is configured. Do not claim the ticket is
-in ServiceNow unless the tool result confirms an external record/link.
-To OPEN a ticket, call open_ticket with service_name and a short_description of the
-reported symptom. Report back the ticket number.
-To UPDATE a ticket, call update_ticket with the number and a work_note summarizing what was
-found/done. Leave it "In Progress" while a repair PR awaits human review. The Streamlit HILT
-workflow resolves it only after merge and verified app recovery. Always report back the ticket
-number and its new state.
-Never invent a ticket number yourself -- always use the one returned by open_ticket.
-Open at most ONE ticket per incident -- if you are asked to update a ticket, that always
-means calling update_ticket on the existing number, never calling open_ticket again.
-""" ${this_is_not_a_game} "\n" ${exact_service_name_rule} "\n" ${aaosa_instructions}
-        tools = ["open_ticket", "update_ticket"]
+        instructions = """
+Call github_deployments once with the exact service_name and the incident environment if known. Report each deployment's
+version or commit, environment, state, event time, author and link. Only a deployment whose state is success counts as
+deployed; a commit or build is not a deployment. For services github_deployments has no mapping for, call deploy_lookup.
+""" ${this_is_not_a_game} "\n" ${exact_values_rule} "\n" ${evidence_rule} "\n" ${aaosa_instructions}
+        tools = ["github_deployments", "deploy_lookup"]
     }
     {
         name = "RunbookAgent"
         function = ${aaosa_call}{
-            description = "Finds the most relevant past runbook/postmortem for an incident description."
+            description = "Finds the most relevant runbook for an incident description."
         }
-        instructions =
-"""
-Your job is to find the best-matching past runbook/postmortem for an incident by calling
-the runbook_search tool with a free-text description of the symptoms (service name, error
-codes, message snippets). Current results are synthetic fixture records shaped like
-Confluence pages; no live Confluence search is performed. Report only a match returned by
-the tool, identify it as demo/fixture evidence, and copy its id, title, recommended action,
-and link exactly as returned. Never invent a page or link.
-Identify it as fixture evidence and preserve its source_status and evidence record_id.
-""" ${this_is_not_a_game} "\n" ${aaosa_instructions}
+        instructions = """
+Call runbook_search once with a free-text description of the symptoms (service name, error codes, message snippets).
+Report only a match the tool returned: copy its id, title, recommended action and link exactly, and state whether it is
+fixture or live evidence. Never invent a page or link. If nothing matches, say so.
+""" ${this_is_not_a_game} "\n" ${evidence_rule} "\n" ${aaosa_instructions}
         tools = ["runbook_search"]
-    }
-    {
-        name = "RemediationAgent"
-        function = ${aaosa_call}{
-            description =
-"""Creates a proposed config change and runs local preflight checks after a verified incident. It does
-not change a running service or claim GitHub CI results; a human-reviewed PR is required for that."""
-        }
-        instructions =
-"""
-You prepare a repair proposal for a verified incident. Call the remediation_pipeline tool exactly once
-with the service_name. Report the fix summary, config diff and local preflight results. Clearly state
-that these are not GitHub Actions results, no running service was changed, and the ticket must remain
-open until a human reviews and merges a GitHub pull request and recovery is verified.
-""" ${this_is_not_a_game} "\n" ${exact_service_name_rule} "\n" ${aaosa_instructions}
-        tools = ["remediation_pipeline"]
-    }
-    {
-        name = "HistorianAgent"
-        function = ${aaosa_call}{
-            description =
-"""Persistent-memory agent: recalls prior recorded incidents for a service, and records a
-new incident once it's resolved. Backed by an append-only store that persists across
-separate conversations, not just within this one."""
-        }
-        instructions =
-"""
-You manage the incident-history memory for the Sentinel network.
-To RECALL prior incidents for a service, call the recall_incidents tool with the
-service_name. Report back how many prior incidents were found. Recurrence itself is a
-secondary detail -- the primary thing to report is the tool's suggested_hotfix, if one
-was returned: pass it on verbatim as an actionable next step ("a known fix already
-exists for this"), not just as a passing remark that this happened before.
-To RECORD a resolved incident, call the record_incident tool with service_name,
-hypothesis, verdict, runbook_id (if any), and a one-sentence summary. Only do this when
-explicitly asked to record/store an incident, never when asked to recall.
-""" ${this_is_not_a_game} "\n" ${exact_service_name_rule} "\n" ${aaosa_instructions}
-        tools = ["recall_incidents", "record_incident"]
     }
     {
         name = "Scribe"
         function = ${aaosa_call}{
-        description =
-"""Synthesizes the final incident summary and recommended action. MUST be called with:
-the service name, available log/metric evidence, the runbook match, any recurring-incident context, and a draft
-root-cause hypothesis."""
+            description = "Verifies a root-cause hypothesis with the deterministic correlation check and writes the incident summary."
         }
-        instructions =
-"""
-You are the Scribe. You receive a draft root-cause hypothesis along with supporting
-evidence (service name, log and metric findings, deploy findings, runbook match, and whether this
-service has a recurring-incident history).
-
-Before presenting ANY root-cause hypothesis, you MUST call the correlation_check tool with
-just the service_name and the hypothesis. Never skip this step and never present a
-hypothesis you have not run through correlation_check. correlation_check independently
-re-derives the actual incident and deploy timestamps from source data itself -- you do not
-need to (and should not try to) pass timestamps to it.
-The hypothesis string you pass to correlation_check MUST explicitly state the service name
-verbatim (e.g. "The checkout-service deploy ... caused ...") -- a hypothesis that only
-refers to "the service" or omits the name will be rejected as not specific enough.
-
-Then produce a short incident summary with these sections:
-- Incident: what was observed (service, symptom, timestamp) -- use the incident_time
-  correlation_check returned, since that is the verified value.
-- Likely cause: the hypothesis, CLEARLY labeled with the correlation_check verdict
-  (SUPPORTED or NOT_SUPPORTED) and its reasoning. If NOT_SUPPORTED, say so plainly and do
-  NOT present the hypothesis as confident fact -- recommend further investigation instead.
-- Matching runbook: id and title, if any, and whether its recommended_action applies.
-  You were given a runbook match if one was found -- report its exact id and title
-  verbatim, plus its Confluence webui_link if you were given one. Only say "no runbook
-  was found" if you were explicitly told none was found; never say this just because you
-  forgot or dropped it while summarizing.
-- Recommended action: a concrete next step (e.g. rollback a specific version, escalate,
-  or investigate further), consistent with the correlation_check verdict.
-- Suggested hotfix (only if HistorianAgent returned one): present it as a concrete,
-  ready-to-apply next step ("a known fix already exists: ...") ahead of any generic
-  "investigate further" advice. Only mention that this is a recurring pattern in passing,
-  as context for why the hotfix is trusted -- it is not the headline of the summary.
-""" ${this_is_not_a_game} "\n" ${exact_service_name_rule} "\n" ${aaosa_instructions}
+        instructions = """
+You receive a draft root-cause hypothesis and the gathered evidence. Before stating any root cause you MUST call
+correlation_check with only service_name and hypothesis. The hypothesis must name the service verbatim (e.g. "The
+checkout-service deploy ... caused ..."). The tool re-derives the incident and deploy timestamps from source evidence
+itself, so never pass timestamps to it.
+Then write a short summary: Incident (use the incident_time the tool returned), Likely cause (labelled with the verdict
+and its reasoning; if NOT_SUPPORTED say so plainly and recommend further investigation, not a confident cause), Matching
+runbook (exact id, title and link if you were given one), Recommended action consistent with the verdict.
+""" ${this_is_not_a_game} "\n" ${exact_values_rule} "\n" ${aaosa_instructions}
         tools = ["correlation_check"]
     }
+    {
+        name = "Responder"
+        function = ${aaosa_call}{
+            description = "Owns the incident ticket, incident memory and the repair proposal: opens the ticket, recalls prior incidents, and finalizes the incident."
+        }
+        instructions = """
+You handle the operational record for the incident.
+OPEN: call open_ticket once with service_name and a short_description of the symptom, then call recall_incidents with the
+service_name. Report the ticket number and, verbatim, the suggested_hotfix if recall_incidents returned one.
+FINALIZE: call finalize_incident once (it records the incident and, only for a SUPPORTED verdict, prepares a bounded config
+fix with local preflight checks), then call update_ticket once with a work note summarizing the outcome. Keep the ticket
+In Progress: only a human reviewing and merging the PR may resolve it. Report the ticket number and state.
+Never invent a ticket number, never open a second ticket, and never claim a running service was changed.
+""" ${this_is_not_a_game} "\n" ${exact_values_rule} "\n" ${aaosa_instructions}
+        tools = ["open_ticket", "recall_incidents", "finalize_incident", "update_ticket"]
+    }
 
+    # --- Coded tools: deterministic Python, no LLM calls ---
     # --- Coded tools (plain Python functions over synthetic data, no LLM calls) ---
     {
         name = "loki_logs"
         function = {
-            description = "Searches live Grafana Loki for checkout-service HTTP 5xx logs in a bounded alert-centered time range; sanitizes log lines before returning them."
+            description = "Returns error-log evidence around the alert time. Replay mode reads the bundled fixture; SENTINEL_MODE=live queries Grafana Loki. Output is sanitized and labelled with its source status."
             parameters = {
                 type = "object"
                 properties = {
@@ -363,7 +182,7 @@ Then produce a short incident summary with these sections:
     {
         name = "prometheus_metrics"
         function = {
-            description = "Queries the read-only Prometheus HTTP API for bounded checkout error-rate evidence around the exact alert start time. No metric fixtures are used."
+            description = "Returns error-rate evidence around the alert time. Replay mode reads the bundled fixture; SENTINEL_MODE=live queries the read-only Prometheus HTTP API."
             parameters = {
                 type = "object"
                 properties = {
@@ -380,6 +199,28 @@ Then produce a short incident summary with these sections:
             }
         }
         class = "coded_tools.sentinel.prometheus_metrics.PrometheusMetrics"
+    }
+    {
+        name = "github_deployments"
+        function = {
+            description =
+"""Returns deployment evidence. Replay mode reads the bundled deploy fixture; SENTINEL_MODE=live reads explicit GitHub Deployment records for checkout-service. Only a successful deployment status counts; commits and builds are not deployments."""
+            parameters = {
+                type = "object"
+                properties = {
+                    service_name = {
+                        type = "string"
+                        description = "The affected service; currently must be checkout-service."
+                    }
+                    environment = {
+                        type = "string"
+                        description = "Exact incident environment, such as demo. If omitted, uses SENTINEL_GITHUB_DEPLOYMENT_ENVIRONMENT."
+                    }
+                }
+                required = ["service_name"]
+            }
+        }
+        class = "coded_tools.sentinel.github_deployments.GithubDeployments"
     }
     {
         name = "deploy_lookup"
@@ -405,7 +246,7 @@ Then produce a short incident summary with these sections:
     {
         name = "runbook_search"
         function = {
-            description = "Searches explicitly configured Confluence spaces using read-only API access; uses the local JSON runbook fixture when Confluence is not configured."
+            description = "Finds the best-matching runbook. Default replay mode searches the bundled fixture; SENTINEL_MODE=live searches the configured Confluence space."
             parameters = {
                 type = "object"
                 properties = {
@@ -418,56 +259,6 @@ Then produce a short incident summary with these sections:
             }
         }
         class = "coded_tools.sentinel.runbook_search.RunbookSearch"
-    }
-    {
-        name = "recall_incidents"
-        function = {
-            description = "Looks up prior incidents from the local JSON incident-history store."
-            parameters = {
-                type = "object"
-                properties = {
-                    service_name = {
-                        type = "string"
-                        description = "The service to look up prior incidents for, e.g. 'checkout-service'."
-                    }
-                }
-                required = ["service_name"]
-            }
-        }
-        class = "coded_tools.sentinel.recall_incidents.RecallIncidents"
-    }
-    {
-        name = "record_incident"
-        function = {
-            description = "Records an incident into the local JSON incident-history store."
-            parameters = {
-                type = "object"
-                properties = {
-                    service_name = {
-                        type = "string"
-                        description = "The affected service."
-                    }
-                    hypothesis = {
-                        type = "string"
-                        description = "The root-cause hypothesis that was evaluated."
-                    }
-                    verdict = {
-                        type = "string"
-                        description = "The correlation_check verdict: 'SUPPORTED' or 'NOT_SUPPORTED'."
-                    }
-                    runbook_id = {
-                        type = "string"
-                        description = "The id of the matching runbook, if any was found. Omit if none."
-                    }
-                    summary = {
-                        type = "string"
-                        description = "A one-sentence summary of the incident and its outcome."
-                    }
-                }
-                required = ["service_name", "hypothesis", "verdict", "summary"]
-            }
-        }
-        class = "coded_tools.sentinel.record_incident.RecordIncident"
     }
     {
         name = "correlation_check"
@@ -495,66 +286,21 @@ otherwise relay). Only service_name and hypothesis are needed."""
         class = "coded_tools.sentinel.correlation_check.CorrelationCheck"
     }
     {
-        name = "remediation_pipeline"
+        name = "recall_incidents"
         function = {
-            description =
-"""Proposes a config fix for a verified incident and runs local preflight checks (posting each step
-to the ticket). GitHub PR creation, Actions checks, human approval, and recovery happen separately.
-Refuses unless the correlation check is SUPPORTED."""
+            description = "Looks up prior incidents from the local JSON incident-history store."
             parameters = {
                 type = "object"
                 properties = {
                     service_name = {
                         type = "string"
-                        description = "The affected service, e.g. 'checkout-service'."
+                        description = "The service to look up prior incidents for, e.g. 'checkout-service'."
                     }
                 }
                 required = ["service_name"]
             }
         }
-        class = "coded_tools.sentinel.remediation_pipeline.RemediationPipeline"
-    }
-    {
-        name = "github_deployments"
-        function = {
-            description =
-"""Reads explicit GitHub Deployment records and statuses for checkout-service. Only a successful
-deployment status counts as deployed. Commits and build-only workflow runs are not deployments."""
-            parameters = {
-                type = "object"
-                properties = {
-                    service_name = {
-                        type = "string"
-                        description = "The affected service; currently must be checkout-service."
-                    }
-                    environment = {
-                        type = "string"
-                        description = "Exact incident environment, such as demo. If omitted, uses SENTINEL_GITHUB_DEPLOYMENT_ENVIRONMENT."
-                    }
-                }
-                required = ["service_name"]
-            }
-        }
-        class = "coded_tools.sentinel.github_deployments.GithubDeployments"
-    }
-    {
-        name = "github_deploy_lookup"
-        function = {
-            description =
-"""Attempts a public GitHub commit-history lookup for this repo, with a local cache fallback.
-This is change history, not verified deployment data; available for 'sentinel-agent' only."""
-            parameters = {
-                type = "object"
-                properties = {
-                    service_name = {
-                        type = "string"
-                        description = "Must be 'sentinel-agent' -- the one service this tool has data for."
-                    }
-                }
-                required = ["service_name"]
-            }
-        }
-        class = "coded_tools.sentinel.github_deploy_lookup.GithubDeployLookup"
+        class = "coded_tools.sentinel.recall_incidents.RecallIncidents"
     }
     {
         name = "open_ticket"
@@ -605,5 +351,25 @@ This is change history, not verified deployment data; available for 'sentinel-ag
             }
         }
         class = "coded_tools.sentinel.update_ticket.UpdateTicket"
+    }
+
+    {
+        name = "finalize_incident"
+        function {
+            description =
+"""Deterministic close-out. Records the incident in persistent memory and, only when the correlation verdict is
+SUPPORTED, prepares the bounded config fix and runs local preflight checks. Reads everything it needs from verified
+facts, so it takes no required arguments. The ticket stays In Progress; only the human-approved PR workflow resolves it."""
+            parameters {
+                type = "object"
+                properties {
+                    summary {
+                        type = "string"
+                        description = "Optional one-sentence outcome."
+                    }
+                }
+            }
+        }
+        class = "coded_tools.sentinel.finalize_incident.FinalizeIncident"
     }
 ]

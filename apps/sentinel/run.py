@@ -48,12 +48,7 @@ for _path in (str(REPO_ROOT), str(APP_DIR)):
 # pylint: disable=wrong-import-position
 from neuro_san.client.agent_session_factory import DirectAgentSessionFactory  # noqa: E402
 
-from coded_tools.sentinel.record_incident import RecordIncident  # noqa: E402
-from coded_tools.sentinel.remediation_pipeline import RemediationPipeline  # noqa: E402
-from coded_tools.sentinel.remediation_pipeline import plan_exists  # noqa: E402
 from coded_tools.sentinel.schemas import sanitize_record  # noqa: E402
-from coded_tools.sentinel.ticket_store import TicketStore  # noqa: E402
-from coded_tools.sentinel.update_ticket import UpdateTicket  # noqa: E402
 
 # pylint: enable=wrong-import-position
 
@@ -88,79 +83,7 @@ def invoke_agent(
             last_message = chat_msg
         if chat_msg.get("done") is True:
             break
-    response = last_message.get("response", {})
-    _ensure_remediated_and_resolved(response)
-    _ensure_incident_recorded(response)
-    return response
-
-
-def _ensure_remediated_and_resolved(response: Dict[str, Any]) -> None:
-    """
-    Guarantees a local remediation proposal exists for a verified root cause. A human-reviewed GitHub PR and
-    recovery verification are required before the UI can resolve the ticket.
-
-    :param response: the final response body from the network (its sly_data is updated in place).
-    """
-    sly_data = response.get("sly_data")
-    if not isinstance(sly_data, dict):
-        return
-    facts = sly_data.get("sentinel_verified") or {}
-    correlation = facts.get("correlation") or {}
-    service_name = correlation.get("service_name", "")
-    number = sly_data.get("sentinel_ticket_number")
-    if correlation.get("verdict") != "SUPPORTED" or not number or not plan_exists(service_name):
-        return
-    if not facts.get("remediation"):
-        RemediationPipeline().invoke({"service_name": service_name}, sly_data)
-    remediation = (sly_data.get("sentinel_verified") or {}).get("remediation") or {}
-    ticket = TicketStore().get(number) or {}
-    if remediation.get("all_passed") and ticket.get("state") != "Resolved":
-        UpdateTicket().invoke(
-            {
-                "number": number,
-                "work_note": (
-                    f"Local preflight passed for the proposed fix from runbook {remediation.get('runbook_id')}. "
-                    "GitHub PR checks, human approval, merge and recovery verification are still required."
-                ),
-            },
-            sly_data,
-        )
-
-
-def _ensure_incident_recorded(response: Dict[str, Any]) -> None:
-    """
-    Guarantees the incident reaches persistent memory once a verdict exists. The HistorianAgent is asked to
-    record it, but an LLM may skip or repeat that tool call; RecordIncident is idempotent per incident session,
-    so calling it here again is a no-op when the agent already did, and a safety net when it didn't.
-
-    :param response: the final response body from the network (its sly_data is updated in place).
-    """
-    sly_data = response.get("sly_data")
-    if not isinstance(sly_data, dict):
-        return
-    facts = sly_data.get("sentinel_verified") or {}
-    correlation = facts.get("correlation")
-    if not correlation:
-        return
-    runbook_id = (facts.get("runbook") or {}).get("id")
-    if correlation.get("delta_minutes") is not None:
-        timing = f"deploy and incident {correlation['delta_minutes']} min apart"
-    else:
-        timing = "insufficient deploy/log evidence to compare timing"
-    summary = (
-        f"{correlation['service_name']}: {correlation['verdict']} -- {timing}"
-        + (f"; matched runbook {runbook_id}." if runbook_id else ".")
-    )
-    RecordIncident().invoke(
-        {
-            "service_name": correlation["service_name"],
-            "hypothesis": correlation["hypothesis"],
-            "verdict": correlation["verdict"],
-            "runbook_id": runbook_id,
-            "summary": summary,
-        },
-        sly_data,
-    )
+    return last_message.get("response", {})
 
 
 def format_verified_facts(sly_data: Optional[Dict[str, Any]]) -> str:

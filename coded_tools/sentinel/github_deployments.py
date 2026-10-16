@@ -15,6 +15,9 @@ from urllib.parse import quote
 import requests
 from neuro_san.interfaces.coded_tool import CodedTool
 
+from coded_tools.sentinel.deploy_lookup import DeployLookup
+from coded_tools.sentinel.mode import demo_mode
+
 from coded_tools.sentinel.schemas import EvidenceRecord
 from coded_tools.sentinel.schemas import SourceStatus
 from coded_tools.sentinel.schemas import dump_model
@@ -45,6 +48,8 @@ class GithubDeployments(CodedTool):
 
     def invoke(self, args: Dict[str, Any], sly_data: Dict[str, Any]) -> Union[Dict[str, Any], str]:
         service_name = str(args.get("service_name") or "").strip().lower()
+        if demo_mode():
+            return DeployLookup().invoke({"service_name": service_name, "replay": True}, sly_data)
         if service_name != CHECKOUT_SERVICE:
             return unavailable_result(SOURCE, f"No GitHub repository mapping is configured for service '{service_name or 'unknown'}'.")
 

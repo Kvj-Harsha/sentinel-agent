@@ -15,6 +15,7 @@ from urllib.parse import urlencode
 from neuro_san.interfaces.coded_tool import CodedTool
 
 from coded_tools.sentinel.logs_lookup import LogsLookup
+from coded_tools.sentinel.mode import demo_mode
 from coded_tools.sentinel.loki_client import LokiClient
 from coded_tools.sentinel.loki_client import LokiError
 from coded_tools.sentinel.schemas import EvidenceRecord
@@ -48,6 +49,8 @@ class LokiLogs(CodedTool):
 
     def invoke(self, args: Dict[str, Any], sly_data: Dict[str, Any]) -> Union[Dict[str, Any], str]:
         service_name = str(args.get("service_name") or "").strip().lower()
+        if demo_mode():
+            return LogsLookup().invoke({"service_name": service_name}, sly_data)
         logql = SERVICE_SELECTORS.get(service_name)
         source = "loki"
         if not logql:

@@ -85,14 +85,16 @@ class RecallIncidents(CodedTool):
         :param prior: prior incidents for the service, most recent first.
         :return: a one-sentence actionable suggestion, or None if nothing usable is on record.
         """
-        last = prior[0]
-        runbook_id = last.get("runbook_id")
+        # Only an incident whose cause was verified (SUPPORTED) and that matched a runbook is a known fix; a
+        # NOT_SUPPORTED run is a dead end and must never be presented to the on-call engineer as a "hotfix".
+        proven = [entry for entry in prior if entry.get("verdict") == "SUPPORTED" and entry.get("runbook_id")]
+        if not proven:
+            return None
+        last = proven[0]
         last_summary = (last.get("summary") or "").strip()
-        if not runbook_id:
-            return last_summary or None
         if last_summary:
-            return f"Reapply the fix from {runbook_id}: {last_summary}"
-        return f"Reapply the fix from {runbook_id}."
+            return f"Reapply the fix from {last['runbook_id']}: {last_summary}"
+        return f"Reapply the fix from {last['runbook_id']}."
 
     async def async_invoke(self, args: Dict[str, Any], sly_data: Dict[str, Any]) -> Union[Dict[str, Any], str]:
         """Delegates to the synchronous invoke method because it's quick, non-blocking."""

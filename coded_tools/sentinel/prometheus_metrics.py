@@ -3,7 +3,9 @@
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+import json
 import logging
+from pathlib import Path
 from typing import Any
 from typing import Dict
 from typing import Union
@@ -11,16 +13,19 @@ from urllib.parse import urlencode
 
 from neuro_san.interfaces.coded_tool import CodedTool
 
+from coded_tools.sentinel.mode import demo_mode
 from coded_tools.sentinel.prometheus_client import PrometheusClient
 from coded_tools.sentinel.prometheus_client import PrometheusError
 from coded_tools.sentinel.schemas import EvidenceRecord
 from coded_tools.sentinel.schemas import SourceStatus
 from coded_tools.sentinel.schemas import dump_model
 from coded_tools.sentinel.schemas import unavailable_result
+from coded_tools.sentinel.schemas import utc_now
 from coded_tools.sentinel.verified_facts import publish_evidence
 
 logger = logging.getLogger(__name__)
 
+FIXTURE_FILE = Path(__file__).parent / "data" / "metrics.json"
 MAX_LOOKBACK_MINUTES = 15
 MAX_LOOKAHEAD_MINUTES = 15
 MAX_SERIES = 25
@@ -45,6 +50,8 @@ class PrometheusMetrics(CodedTool):
 
     def invoke(self, args: Dict[str, Any], sly_data: Dict[str, Any]) -> Union[Dict[str, Any], str]:
         service_name = str(args.get("service_name") or "").strip().lower()
+        if demo_mode():
+            return self._replay_fixture(service_name, sly_data)
         promql = SERVICE_METRICS.get(service_name)
         source = "prometheus"
         if not promql:
@@ -131,6 +138,27 @@ class PrometheusMetrics(CodedTool):
             "max_errors_per_second": highest_rate,
             "summary": f"Prometheus returned {len(evidence)} live checkout error-rate samples; peak {highest_rate:.4f} errors/second.",
         }
+
+    @staticmethod
+    def _replay_fixture(service_name: str, sly_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Replay bundled error-rate samples for the demo scenario; every record is labelled `fixture`."""
+        source = "fixture:metrics.json"
+        rows = [row for row in json.loads(FIXTURE_FILE.read_text(encoding="utf-8")) if row["service"] == service_name]
+        if not rows:
+            return unavailable_result(source, f"No replay metrics exist for service '{service_name or 'unknown'}'.")
+        retrieved_at = utc_now()
+        evidence = [dump_model(EvidenceRecord(
+            evidence_type="metric", service_name=service_name, source=source, source_status=SourceStatus.FIXTURE,
+            query="replay: checkout error rate", record_id=f"metrics.json:{row['timestamp']}",
+            event_time=row["timestamp"], retrieved_at=retrieved_at,
+            summary=f"Checkout error rate was {row['errors_per_second']:.2f} errors/second at {row['timestamp']}.",
+            safe_fields={"metric": "checkout_requests_total", "value_per_second": row["errors_per_second"]},
+        )) for row in rows]
+        publish_evidence(sly_data, evidence)
+        peak = max(row["errors_per_second"] for row in rows)
+        return {"matches": evidence, "evidence": evidence, "source": source, "source_status": SourceStatus.FIXTURE.value,
+                "sample_count": len(evidence), "max_errors_per_second": peak,
+                "summary": f"Replay scenario: {len(evidence)} error-rate samples; peak {peak:.2f} errors/second."}
 
     async def async_invoke(self, args: Dict[str, Any], sly_data: Dict[str, Any]) -> Union[Dict[str, Any], str]:
         """Prometheus HTTP requests use a short bounded timeout; reuse the sync adapter."""

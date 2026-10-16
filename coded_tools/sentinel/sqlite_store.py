@@ -57,6 +57,13 @@ CREATE TABLE IF NOT EXISTS audit_events (
     details_json TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS audit_events_entity_idx ON audit_events(entity_type, entity_id, id);
+CREATE TABLE IF NOT EXISTS conversations (
+    id TEXT PRIMARY KEY,
+    status TEXT NOT NULL DEFAULT 'active',
+    ticket_number TEXT,
+    updated_at TEXT,
+    data_json TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS alert_jobs (
     id TEXT PRIMARY KEY,
     updated_at TEXT,
@@ -208,6 +215,31 @@ class SQLiteDatabase:
             raise
         finally:
             connection.close()
+
+    def save_conversation(self, conversation_id: str, data: Dict[str, Any], ticket_number: str | None = None) -> None:
+        """Upsert the whole UI conversation (messages, chat context, sly_data) so a page reload can restore it."""
+        payload = json.dumps(sanitize_record(data), ensure_ascii=False, default=str)
+        with self.transaction() as connection:
+            connection.execute(
+                "INSERT INTO conversations (id, status, ticket_number, updated_at, data_json) "
+                "VALUES (?, 'active', ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?) "
+                "ON CONFLICT(id) DO UPDATE SET ticket_number = COALESCE(excluded.ticket_number, ticket_number), "
+                "updated_at = excluded.updated_at, data_json = excluded.data_json",
+                (conversation_id, ticket_number, payload),
+            )
+
+    def archive_conversation(self, conversation_id: str) -> None:
+        with self.transaction() as connection:
+            connection.execute("UPDATE conversations SET status = 'archived' WHERE id = ?", (conversation_id,))
+
+    def active_conversations(self, limit: int = 5) -> list[Dict[str, Any]]:
+        """Newest active (not archived) conversations first, each with its id and ticket number."""
+        with self.connection() as connection:
+            rows = connection.execute(
+                "SELECT id, ticket_number, data_json, updated_at FROM conversations WHERE status = 'active' "
+                "ORDER BY updated_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [{"id": row[0], "ticket_number": row[1], **json.loads(row[2]), "updated_at": row[3]} for row in rows]
 
     def save_alert_job(self, job: Dict[str, Any]) -> None:
         """Upsert a webhook job so a UI running in another process can show it."""

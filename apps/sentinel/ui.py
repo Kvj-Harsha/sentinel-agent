@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import streamlit as st  # noqa: E402  pylint: disable=wrong-import-position
+import conversation_store  # noqa: E402  pylint: disable=wrong-import-position
 from alerts import compose_incident_report  # noqa: E402  pylint: disable=wrong-import-position
 from alerts import list_presets  # noqa: E402  pylint: disable=wrong-import-position
 from alerts import load_preset  # noqa: E402  pylint: disable=wrong-import-position
@@ -63,10 +64,39 @@ if "ticket_number" not in st.session_state:
     st.session_state.ticket_number = None
 if "alert_context" not in st.session_state:
     st.session_state.alert_context = None
+if "conversation_id" not in st.session_state:
+    st.session_state.conversation_id = None
+    # A reload (or new tab) starts an empty Streamlit session: bring back the ongoing incident from the database.
+    _restored = conversation_store.restore_latest()
+    if _restored:
+        st.session_state.conversation_id = _restored["id"]
+        st.session_state.messages = _restored.get("messages") or []
+        st.session_state.chat_context = _restored.get("chat_context") or {}
+        st.session_state.sly_data = _restored.get("sly_data") or {}
+        st.session_state.ticket_number = _restored.get("ticket_number")
+        st.session_state.alert_context = _restored.get("alert_context")
+        st.session_state.restored_running = bool(_restored.get("running"))
+
+
+if st.session_state.get("restored_running"):
+    # The investigation was started before the reload; its worker thread saves the result when it finishes.
+    _latest = conversation_store.load(st.session_state.conversation_id)
+    if _latest and not _latest.get("running"):
+        st.session_state.messages = _latest.get("messages") or []
+        st.session_state.chat_context = _latest.get("chat_context") or {}
+        st.session_state.sly_data = _latest.get("sly_data") or {}
+        st.session_state.ticket_number = _latest.get("ticket_number")
+        st.session_state.restored_running = False
+
+
+def _conversation_state() -> Dict[str, Any]:
+    return {key: st.session_state.get(key) for key in ("messages", "chat_context", "sly_data", "ticket_number", "alert_context")}
 
 
 def reset_incident() -> None:
-    """Starts a fresh incident: clears the conversation, its context and the ticket binding."""
+    """Starts a fresh incident: archives the stored conversation, then clears its context and ticket binding."""
+    conversation_store.archive(st.session_state.get("conversation_id"))
+    st.session_state.conversation_id = None
     st.session_state.messages = []
     st.session_state.chat_context = {}
     st.session_state.sly_data = {}
@@ -520,16 +550,31 @@ def run_turn_live(text: str, ticket_slot: Any) -> None:
     :param ticket_slot: a Streamlit placeholder to redraw the ticket card into.
     """
     st.session_state.messages.append({"role": "user", "content": text})
+    if not st.session_state.conversation_id:
+        st.session_state.conversation_id = conversation_store.new_id()
+    conversation_id = st.session_state.conversation_id
+    stored_state = {**_conversation_state(), "running": True}
+    conversation_store.persist(conversation_id, stored_state)
     sly_data = dict(st.session_state.sly_data)
     chat_context = dict(st.session_state.chat_context)
     known_before = len(load_tickets()) if not sly_data.get("sentinel_ticket_number") else None
     outcome: Dict[str, Any] = {}
 
     def worker() -> None:
+        # Persist the outcome from this thread too: if the page is reloaded mid-run the Streamlit script is gone,
+        # but the investigation (and its saved result) must still complete.
         try:
             outcome["response"] = invoke_agent(text, sly_data=sly_data, chat_context=chat_context)
+            response = outcome["response"]
+            stored_state["messages"] = [*stored_state["messages"], {"role": "assistant", "content": response.get("text", "(no response)")}]
+            stored_state["chat_context"] = response.get("chat_context") or stored_state["chat_context"]
+            stored_state["sly_data"] = response.get("sly_data") or stored_state["sly_data"]
         except Exception as exc:  # pylint: disable=broad-exception-caught
             outcome["error"] = exc
+            stored_state["messages"] = [*stored_state["messages"], {"role": "assistant", "content": f"Error: {exc}"}]
+        finally:
+            stored_state["running"] = False
+            conversation_store.persist(conversation_id, stored_state)
 
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()
@@ -548,6 +593,7 @@ def run_turn_live(text: str, ticket_slot: Any) -> None:
         st.session_state.chat_context = response["chat_context"]
     if response.get("sly_data"):
         st.session_state.sly_data = response["sly_data"]
+    conversation_store.persist(conversation_id, {**_conversation_state(), "running": False})
 
 
 st.title("Sentinel")
@@ -674,6 +720,9 @@ for message in st.session_state.messages:
             st.caption("Agent-generated response")
         st.markdown(message["content"])
 
+if st.session_state.get("restored_running"):
+    st.info("Restored your ongoing investigation. It is still running; this page updates when it finishes.")
+
 typed = st.chat_input("Ask about this incident or describe a new one...")
 if typed:
     pending = typed
@@ -692,4 +741,8 @@ if pending:
     with st.chat_message("assistant"):
         with st.spinner("Commander is coordinating the agents (about a minute)..."):
             run_turn_live(pending, ticket_slot)
+    st.rerun()
+
+if st.session_state.get("restored_running"):
+    time.sleep(3)
     st.rerun()

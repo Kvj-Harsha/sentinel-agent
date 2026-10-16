@@ -16,10 +16,16 @@ services:
       SENTINEL_SEED_LEGACY_DATA: "true"
       PROMETHEUS_URL: http://prometheus:9090
       LOKI_URL: http://host.docker.internal:3100
+      # The checkout demo app runs in its own container: Sentinel writes the approved settings to the shared volume
+      # it reads from, and verifies recovery over the host port.
+      SENTINEL_DEMO_APP_CONFIG_PATH: /demo-config/settings.json
+      SENTINEL_DEMO_APP_URL: http://host.docker.internal:8000
+      SENTINEL_DEMO_APP_PUBLIC_URL: http://127.0.0.1:8000
     ports:
       - "127.0.0.1:8501:8501"
     volumes:
       - sentinel-data:/var/lib/sentinel
+      - checkout-demo-settings:/demo-config
     networks:
       - sentinel-runtime
     extra_hosts:
@@ -42,8 +48,14 @@ services:
       SENTINEL_SEED_LEGACY_DATA: "true"
       PROMETHEUS_URL: http://prometheus:9090
       LOKI_URL: http://host.docker.internal:3100
+      # The checkout demo app runs in its own container: Sentinel writes the approved settings to the shared volume
+      # it reads from, and verifies recovery over the host port.
+      SENTINEL_DEMO_APP_CONFIG_PATH: /demo-config/settings.json
+      SENTINEL_DEMO_APP_URL: http://host.docker.internal:8000
+      SENTINEL_DEMO_APP_PUBLIC_URL: http://127.0.0.1:8000
     volumes:
       - sentinel-data:/var/lib/sentinel
+      - checkout-demo-settings:/demo-config
     networks:
       - sentinel-runtime
     extra_hosts:
@@ -83,6 +95,9 @@ networks:
     name: sentinel-agent-runtime
 
 volumes:
+  checkout-demo-settings:
+    name: checkout-demo-settings
+    external: true
   sentinel-data:
     name: sentinel-agent_sentinel-data
 

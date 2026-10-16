@@ -361,7 +361,7 @@ def render_human_approval(ticket: Optional[Dict[str, Any]], instance_key: str = 
         ):
             st.info("Repair creation is locked until this ticket has a matching SUPPORTED correlation, log and deployment evidence, and passing local preflight checks.")
             return
-        st.markdown(f"Demo app: [Open checkout service]({os.environ.get('SENTINEL_DEMO_APP_URL', 'http://127.0.0.1:8000')})")
+        st.markdown(f"Demo app: [Open checkout service]({os.environ.get('SENTINEL_DEMO_APP_PUBLIC_URL') or os.environ.get('SENTINEL_DEMO_APP_URL', 'http://127.0.0.1:8000')})")
         if not github_pr_client.is_configured():
             st.warning("Connect the dedicated demo GitHub repository to enable PR creation and review.")
             st.caption("Set SENTINEL_GITHUB_TOKEN, SENTINEL_DEMO_GITHUB_OWNER and SENTINEL_DEMO_GITHUB_REPO in .env.")

@@ -14,6 +14,7 @@ import threading
 import time
 import tracemalloc
 import uuid
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -75,7 +76,14 @@ def _restore() -> None:
             _conversation.update({key: restored.get(key) for key in
                                   ("messages", "chat_context", "sly_data", "ticket_number", "alert_context", "running")})
             _conversation["id"] = restored["id"]
-            _conversation["updated"] = time.time()
+            # Use the conversation's own last-updated time, not this restart's wall-clock time: otherwise a
+            # restored-but-older conversation always outranks a genuinely newer completed webhook job in
+            # build_state()'s comparison, and the UI shows stale data right after every container restart.
+            try:
+                _conversation["updated"] = datetime.fromisoformat(
+                    str(restored.get("updated_at")).replace("Z", "+00:00")).timestamp()
+            except (TypeError, ValueError):
+                _conversation["updated"] = 0.0
 
 
 def _stored_state() -> Dict[str, Any]:
@@ -340,7 +348,7 @@ def _repair_view(ticket: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 
 def _job_view(job: Dict[str, Any]) -> Dict[str, Any]:
     return {key: job.get(key) for key in ("id", "alert_name", "service", "severity", "state", "received_at", "updated_at",
-                                          "ticket_number", "error", "dependency_chain")}
+                                          "ticket_number", "error", "dependency_chain", "perf")}
 
 
 def _webhook_health() -> Dict[str, Any]:
@@ -382,6 +390,9 @@ def build_state() -> Dict[str, Any]:
                   "error": job.get("error")}
         running = job.get("state") in ("queued", "investigating")
         dependency_chain = job.get("dependency_chain") or []
+        # The webhook investigation runs in the separate sentinel-webhook process, so its own profiling (recorded
+        # on the job, which is shared through SQLite) must be shown here rather than this process's local _perf.
+        perf = job.get("perf")
     else:
         number = conv.get("ticket_number") or (conv.get("sly_data") or {}).get("sentinel_ticket_number")
         ticket = tickets.get(number)
@@ -394,6 +405,7 @@ def build_state() -> Dict[str, Any]:
                   "severity": context.get("severity"), "time": context.get("event_time"), "origin": context.get("origin")}
         running = bool(conv.get("running"))
         dependency_chain = []
+        perf = None
 
     return {
         "now": time.time(), "running": running, "source": source, "ticket": _ticket_view(ticket),
@@ -405,7 +417,7 @@ def build_state() -> Dict[str, Any]:
             "servicenow": servicenow_client.is_configured(), "github": github_pr_client.is_configured(),
             "demo_app_url": os.environ.get("SENTINEL_DEMO_APP_PUBLIC_URL") or os.environ.get("SENTINEL_DEMO_APP_URL", ""),
         },
-        "perf": {**_perf, "confluence_cache": cache_stats()},
+        "perf": perf or {**_perf, "confluence_cache": cache_stats()},
     }
 
 

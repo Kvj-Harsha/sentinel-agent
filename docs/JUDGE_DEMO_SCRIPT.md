@@ -1,9 +1,41 @@
 # Live judge demo script
 
-Rehearsed end-to-end on 2026-10-18 (PR #8 merged, ticket INC0010053 resolved). The stack is currently re-armed
-and ready to go again. Two screens/tabs recommended: Sentinel UI (localhost:8501) and the checkout app
-(localhost:8000). Keep github.com/Kvj-Harsha/checkout-demo-app and the ServiceNow incident list open in
-background tabs to flip to after the merge.
+Rehearsed end-to-end on 2026-10-18 twice (PR #8 and PR #10 merged; tickets INC0010053 and INC0010054 resolved,
+both verified live on GitHub and ServiceNow). The stack is re-armed and ready to go again.
+
+## Links to open (one tab each, before judges arrive)
+
+| What | URL |
+|---|---|
+| Checkout app (trigger the fault here) | http://127.0.0.1:8000 |
+| Sentinel UI (the dashboard you narrate from) | http://127.0.0.1:8501 |
+| GitHub repo (issue/PR/CI/merge) | https://github.com/Kvj-Harsha/checkout-demo-app |
+| ServiceNow incident list | https://dev442258.service-now.com/now/nav/ui/classic/params/target/incident_list.do |
+| Confluence runbook space | https://iiitrr.atlassian.net/wiki/spaces/cts |
+| Prometheus alerts (optional, backup proof) | http://127.0.0.1:9090/alerts |
+
+## What to call out as novel (beyond the base alert-to-merge loop)
+
+These are new today and worth a specific callout since they're what differentiates this from "just wired up
+an LLM to a ticketing system":
+
+- **Recursive agent harness** — `IncidentCommander`'s single-service investigation is wrapped in a
+  deterministic recursion (`coded_tools/sentinel/recursive_investigation.py`): if a service's own evidence
+  comes back `NOT_SUPPORTED`, Sentinel automatically re-investigates the service it depends on
+  (`service_dependencies.py`'s static dependency graph), opening a second ticket and chaining the verdicts —
+  up to a hard depth cap, with cycle protection. Visible in the UI as the **"Dependency chain"** panel under
+  the verdict card. Say: *"This isn't just one LLM call — when the direct evidence doesn't explain it, Sentinel
+  automatically chases the problem upstream through the service dependency graph, on its own, and shows you
+  every hop it took."*
+- **A real cache with an eviction policy** — Confluence runbook lookups go through a small thread-safe LRU+TTL
+  cache (`coded_tools/sentinel/confluence_cache.py`) with real hit/miss/eviction counters, not just a demo
+  prop. Say: *"Runbook lookups are cached with real LRU eviction — repeat queries don't re-hit Confluence, and
+  you can see the hit/miss/eviction counts live."*
+- **Real memory profiling** — every investigation is wrapped in Python's `tracemalloc`, so peak memory and
+  wall-clock duration are measured for real, not estimated. Both the cache stats and the memory/duration
+  numbers show up in the **perf strip** at the bottom of the Sentinel UI.
+- **GitHub/ServiceNow iconography** — every PR, issue, check-run and ServiceNow link in the UI now carries a
+  small inline icon so the two systems are visually distinguishable at a glance, not just text links.
 
 ## 0. Before judges arrive (2 min)
 

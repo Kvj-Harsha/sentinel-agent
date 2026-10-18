@@ -7,6 +7,7 @@ import logging
 import os
 import threading
 import time
+import tracemalloc
 import uuid
 from datetime import datetime
 from datetime import timezone
@@ -22,6 +23,7 @@ from alerts import compose_alertmanager_alert
 from alerts import compose_incident_report
 from run import format_verified_facts
 from run import invoke_agent
+from coded_tools.sentinel.confluence_cache import cache_stats
 from coded_tools.sentinel.open_ticket import OpenTicket
 from coded_tools.sentinel.recursive_investigation import run_investigation_chain
 from coded_tools.sentinel.recursive_investigation import summarize_chain
@@ -58,7 +60,7 @@ def _utc_now() -> str:
 
 _PERSISTED_FIELDS = (
     "id", "received_at", "updated_at", "state", "alert_name", "service", "severity", "fingerprint",
-    "ticket_number", "response", "verified_markdown", "verified_facts", "error", "dependency_chain",
+    "ticket_number", "response", "verified_markdown", "verified_facts", "error", "dependency_chain", "perf",
 )
 
 
@@ -109,6 +111,10 @@ def _json_bytes(body: Dict[str, Any]) -> bytes:
 def _process_job(job: Dict[str, Any]) -> None:
     """Runs the existing Sentinel investigation workflow for one accepted alert, recursively chasing an
     upstream dependency when the triggering service's own evidence does not support a root cause."""
+    started_tracing = not tracemalloc.is_tracing()
+    if started_tracing:
+        tracemalloc.start()
+    job_started = time.monotonic()
     try:
         job["state"] = "investigating"
         _persist(job)
@@ -164,6 +170,12 @@ def _process_job(job: Dict[str, Any]) -> None:
         job["error"] = redact_text(f"Unexpected investigation error: {exc}")
         job["state"] = "failed"
     finally:
+        duration_ms = (time.monotonic() - job_started) * 1000
+        _, peak_bytes = tracemalloc.get_traced_memory()
+        if started_tracing:
+            tracemalloc.stop()
+        job["perf"] = {"memory_peak_kb": round(peak_bytes / 1024, 1), "duration_ms": round(duration_ms, 1),
+                       "confluence_cache": cache_stats()}
         job["updated_at"] = _utc_now()
         _persist(job)
         with _lock:

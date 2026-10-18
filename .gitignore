@@ -33,7 +33,7 @@ docs/diagrams/*.fdb_latexmk
 docs/diagrams/*.synctex.gz
 
 # Hackathon screenshots / scratch demo captures
-docs/screenshots/
+!docs/screenshots/
 
 # Editors / OS
 .idea/

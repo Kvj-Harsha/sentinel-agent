@@ -36,7 +36,5 @@ GitHub Deployments and Confluence. See `coded_tools/sentinel/mode.py`.
 
 ## Known limits
 
-- The diagram in `docs/diagrams/` predates the Responder merge and shows the earlier eight-agent layout; its `.tex`
-  sources need a rebuild.
 - Runbook search is keyword-based. Fixture scenarios cover `checkout-service` end to end; other services replay deploys/logs only.
 - Live mode needs a real GitHub Deployment record and a fresh fault to reach `SUPPORTED`.

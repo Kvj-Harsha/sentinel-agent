@@ -12,10 +12,13 @@ Run with:  python apps/sentinel/alerts.py --preset checkout-500
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any
 from typing import Dict
 from typing import List
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from coded_tools.sentinel.schemas import Incident
 from coded_tools.sentinel.schemas import dump_model

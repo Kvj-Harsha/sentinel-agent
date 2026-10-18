@@ -38,3 +38,5 @@ docs/diagrams/*.synctex.gz
 .DS_Store
 
 .pytest-tmp/
+*.db-wal
+*.db-shm

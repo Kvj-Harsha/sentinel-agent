@@ -46,7 +46,7 @@ def archive(conversation_id: Optional[str]) -> None:
         LOGGER.warning("Could not archive conversation %s", conversation_id, exc_info=True)
 
 
-def _settle_if_stale(conversation: Dict[str, Any]) -> Dict[str, Any]:
+def _settle_if_stale(conversation: Dict[str, Any], *, interrupted: bool = False) -> Dict[str, Any]:
     """A run flagged as running whose worker can no longer exist is closed with an honest message."""
     if not conversation.get("running"):
         return conversation
@@ -55,7 +55,7 @@ def _settle_if_stale(conversation: Dict[str, Any]) -> Dict[str, Any]:
         age = (datetime.now(timezone.utc) - updated).total_seconds()
     except ValueError:
         age = STALE_RUN_SECONDS + 1
-    if age > STALE_RUN_SECONDS:
+    if interrupted or age > STALE_RUN_SECONDS:
         conversation["running"] = False
         conversation["messages"] = [*(conversation.get("messages") or []), {
             "role": "assistant",
@@ -66,7 +66,7 @@ def _settle_if_stale(conversation: Dict[str, Any]) -> Dict[str, Any]:
     return conversation
 
 
-def restore_latest() -> Optional[Dict[str, Any]]:
+def restore_latest(*, interrupt_running: bool = False) -> Optional[Dict[str, Any]]:
     """
     Return the newest ongoing conversation: not archived, and its ticket (if it has one) is not Resolved.
     A resolved incident is finished work, so the page starts clean instead.
@@ -79,7 +79,7 @@ def restore_latest() -> Optional[Dict[str, Any]]:
             ticket = TicketStore().get(number) if number else None
             if ticket and ticket.get("state") == "Resolved":
                 continue
-            return _settle_if_stale(conversation)
+            return _settle_if_stale(conversation, interrupted=interrupt_running)
     except Exception:  # pylint: disable=broad-exception-caught
         LOGGER.warning("Could not restore the previous conversation", exc_info=True)
     return None

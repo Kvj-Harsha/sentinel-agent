@@ -10,6 +10,7 @@ from typing import Optional
 from coded_tools.sentinel import servicenow_client
 from coded_tools.sentinel.schemas import redact_text
 from coded_tools.sentinel.ticket_store import TicketStore
+from coded_tools.sentinel.ticket_binding import owns_ticket
 
 logger = logging.getLogger(__name__)
 
@@ -38,11 +39,9 @@ def add_note(
     posted = sly_data.setdefault("sentinel_notes_posted", [])
     if once_key and once_key in posted:
         return False
-    if once_key:
-        posted.append(once_key)
     store = store or TicketStore()
     ticket = store.get(number)
-    if ticket is None:
+    if not owns_ticket(ticket, sly_data):
         return False
     now = datetime.now(timezone.utc).isoformat()
     notes = [f"{now}: {note}"]
@@ -64,4 +63,6 @@ def add_note(
                 details={"connector": "servicenow", "outcome": "failure"},
             )
     store.update(number, {"append_work_notes": notes, "sys_updated_on": now})
+    if once_key:
+        posted.append(once_key)
     return True

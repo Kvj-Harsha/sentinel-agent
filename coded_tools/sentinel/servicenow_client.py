@@ -25,7 +25,7 @@ class ServiceNowError(Exception):
 
 def is_configured() -> bool:
     """:return: True when enabled and all required ServiceNow credentials are set."""
-    if os.environ.get("SERVICENOW_ENABLED", "true").strip().lower() not in {"1", "true", "yes", "on"}:
+    if os.environ.get("SERVICENOW_ENABLED", "false").strip().lower() not in {"1", "true", "yes", "on"}:
         return False
     return all(os.environ.get(name) for name in ("SERVICENOW_INSTANCE", "SERVICENOW_USER", "SERVICENOW_PASSWORD"))
 
@@ -44,6 +44,8 @@ def record_url(sys_id: str) -> str:
 
 
 def _request(method: str, path: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    if not is_configured():
+        raise ServiceNowError("ServiceNow is disabled or its credentials are incomplete.")
     try:
         response = requests.request(
             method,

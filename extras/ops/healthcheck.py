@@ -18,7 +18,7 @@ def is_healthy(url: str) -> bool:
 parser = argparse.ArgumentParser()
 parser.add_argument("target", choices=("ui", "webhook"))
 target = parser.parse_args().target
-url = "http://127.0.0.1:8501/_stcore/health" if target == "ui" else "http://127.0.0.1:8090/healthz"
+url = "http://127.0.0.1:8501/healthz" if target == "ui" else "http://127.0.0.1:8090/healthz"
 if not is_healthy(url):
     raise SystemExit(1)
 if target == "ui":

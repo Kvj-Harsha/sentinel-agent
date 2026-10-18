@@ -41,7 +41,7 @@ Keep the named volume when restarting the stack. Then, in PowerShell from the Se
 
 ```powershell
 docker compose -f extras/docker-compose.alerting.yml up -d
-streamlit run apps/sentinel/ui.py --server.port 8501
+python apps/sentinel/web.py
 ```
 
 In a second terminal, start the checkout app:

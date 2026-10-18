@@ -15,6 +15,7 @@ from coded_tools.sentinel.open_ticket import TICKET_NUMBER_KEY
 from coded_tools.sentinel.remediation_pipeline import plan_exists
 from coded_tools.sentinel.schemas import redact_text
 from coded_tools.sentinel.ticket_store import TicketStore
+from coded_tools.sentinel.ticket_binding import owns_ticket
 from coded_tools.sentinel.verified_facts import VERIFIED_KEY
 
 logger = logging.getLogger(__name__)
@@ -60,6 +61,8 @@ class UpdateTicket(CodedTool):
         existing = self.store.get(number)
         if existing is None:
             return f"Error: No ticket found with number '{number}'."
+        if not owns_ticket(existing, sly_data):
+            return "Error: Ticket does not belong to this incident session."
 
         # The ticket state follows tool-verified correlation and the HILT repair gate, not the model's say-so.
         verified = sly_data.get(VERIFIED_KEY) or {}

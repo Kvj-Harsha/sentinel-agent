@@ -392,7 +392,7 @@ def render_human_approval(ticket: Optional[Dict[str, Any]], instance_key: str = 
                         if pr.get("sentinel_issue_number") else ""
                     )
                     ticket_notes.add_note(
-                        {"sentinel_ticket_number": ticket["number"]},
+                        {"sentinel_ticket_number": ticket["number"], "incident_session_id": ticket.get("session_id")},
                         f"[GitHub] {issue_note}Repair PR #{pr['number']} opened for human review: {pr['html_url']}",
                     )
                     st.rerun()

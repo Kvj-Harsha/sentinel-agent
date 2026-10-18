@@ -18,6 +18,7 @@ from coded_tools.sentinel.record_incident import RecordIncident
 from coded_tools.sentinel.remediation_pipeline import RemediationPipeline
 from coded_tools.sentinel.remediation_pipeline import plan_exists
 from coded_tools.sentinel.ticket_store import TicketStore
+from coded_tools.sentinel.ticket_binding import owns_ticket
 from coded_tools.sentinel.update_ticket import UpdateTicket
 
 logger = logging.getLogger(__name__)
@@ -70,7 +71,7 @@ def _open_repair_pr(number: str, sly_data: Dict[str, Any]) -> Optional[str]:
     Live mode only: open the GitHub issue and repair PR automatically once the patch passed validation. A human still
     reviews the diff and CI and merges; this only removes the click that created the PR.
     """
-    if demo_mode() or os.environ.get("SENTINEL_AUTO_PR", "true").strip().lower() in {"0", "false", "no", "off"}:
+    if demo_mode() or os.environ.get("SENTINEL_AUTO_PR", "false").strip().lower() not in {"1", "true", "yes", "on"}:
         return None
     store = TicketStore()
     ticket = store.get(number) or {}
@@ -110,6 +111,9 @@ class FinalizeIncident(CodedTool):
         :return: what was done, for the agent to report back.
         """
         facts = sly_data.get("sentinel_verified") or {}
+        number = sly_data.get("sentinel_ticket_number")
+        if number and not owns_ticket(TicketStore().get(number), sly_data):
+            return "Error: Ticket does not belong to this incident session."
         correlation = facts.get("correlation")
         if not correlation:
             return "Error: no correlation_check verdict exists yet; call the Scribe before finalizing."

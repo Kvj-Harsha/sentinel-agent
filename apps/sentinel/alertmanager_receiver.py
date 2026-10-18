@@ -22,12 +22,18 @@ from alerts import compose_alertmanager_alert
 from alerts import compose_incident_report
 from run import format_verified_facts
 from run import invoke_agent
+from coded_tools.sentinel.open_ticket import OpenTicket
+from coded_tools.sentinel.recursive_investigation import run_investigation_chain
+from coded_tools.sentinel.recursive_investigation import summarize_chain
 from coded_tools.sentinel.ticket_store import TicketStore
 from coded_tools.sentinel.schemas import redact_text
 from coded_tools.sentinel.sqlite_store import SQLiteDatabase
+from coded_tools.sentinel.ticket_binding import checked_result
+from coded_tools.sentinel.update_ticket import UpdateTicket
 
 LOGGER = logging.getLogger(__name__)
 MAX_REQUEST_BYTES = 1_048_576
+REQUEST_TIMEOUT_SECONDS = 10
 MAX_ALERTS_PER_REQUEST = 5
 FINGERPRINT_TTL_SECONDS = 3600
 MAX_ACTIVE_JOBS = 4
@@ -41,6 +47,10 @@ _server: ThreadingHTTPServer = None
 _server_thread: threading.Thread = None
 
 
+# Alertmanager retries arrive within seconds; an open ticket older than this belongs to an earlier incident.
+DEDUP_WINDOW_SECONDS = int(os.environ.get("SENTINEL_DEDUP_WINDOW_SECONDS", "1800"))
+
+
 def _utc_now() -> str:
     """:return: current UTC timestamp as an ISO-8601 string."""
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -48,7 +58,7 @@ def _utc_now() -> str:
 
 _PERSISTED_FIELDS = (
     "id", "received_at", "updated_at", "state", "alert_name", "service", "severity", "fingerprint",
-    "ticket_number", "response", "verified_markdown", "error",
+    "ticket_number", "response", "verified_markdown", "verified_facts", "error", "dependency_chain",
 )
 
 
@@ -65,7 +75,7 @@ def _persist(job: Dict[str, Any]) -> None:
 def snapshot_jobs() -> List[Dict[str, Any]]:
     """Returns safe copies of recent webhook jobs (this process plus those persisted by another process)."""
     with _lock:
-        jobs = list(reversed(_jobs[-20:]))
+        jobs = [dict(job) for job in reversed(_jobs[-20:])]
     if os.environ.get("SENTINEL_STORAGE_BACKEND", "sqlite").lower() == "sqlite":
         try:
             known = {job["id"] for job in jobs}
@@ -79,16 +89,12 @@ def snapshot_jobs() -> List[Dict[str, Any]]:
         fingerprint = job.get("fingerprint")
         if fingerprint:
             ticket = TicketStore().find_by_fingerprint(fingerprint)
-            if ticket:
+            if ticket and ticket.get("service_name") == job.get("service"):
                 job["ticket_number"] = ticket.get("number")
                 job["ticket_detected_at"] = _utc_now()
                 continue
-        ticket_count_before = job.get("ticket_count_before")
-        if ticket_count_before is None:
-            continue
-        tickets = TicketStore().load()
-        for ticket in reversed(tickets[ticket_count_before:]):
-            if ticket.get("service_name") == job.get("service"):
+        for ticket in TicketStore().load():
+            if ticket.get("session_id") == job.get("id") and ticket.get("service_name") == job.get("service"):
                 job["ticket_number"] = ticket.get("number")
                 job["ticket_detected_at"] = _utc_now()
                 break
@@ -101,24 +107,53 @@ def _json_bytes(body: Dict[str, Any]) -> bytes:
 
 
 def _process_job(job: Dict[str, Any]) -> None:
-    """Runs the existing Sentinel investigation workflow for one accepted alert."""
+    """Runs the existing Sentinel investigation workflow for one accepted alert, recursively chasing an
+    upstream dependency when the triggering service's own evidence does not support a root cause."""
     try:
         job["state"] = "investigating"
         _persist(job)
-        report = compose_incident_report(job["alert"])
-        job["report"] = report
-        response = invoke_agent(
-            report,
-            sly_data={
-                "alert_fingerprint": job.get("fingerprint"),
-                "incident_session_id": job.get("id"),
-            },
-        )
-        sly_data = response.get("sly_data") or {}
+        seeds_by_service: Dict[str, Dict[str, Any]] = {}
+
+        def investigate_one(service_name: str) -> Any:
+            hop = len(seeds_by_service)
+            if hop == 0:
+                report = compose_incident_report(job["alert"])
+                seed = {"alert_fingerprint": job.get("fingerprint"), "incident_session_id": job.get("id")}
+            else:
+                prior_service = job.get("service")
+                report = (
+                    f"{job['alert_name']} on {prior_service} was not explained by its own evidence. "
+                    f"Checking whether the root cause instead lies in its dependency: {service_name}. "
+                    f"Original alert fired at {job['alert'].get('date', 'unknown time')}."
+                )
+                seed = {"alert_fingerprint": f"{job.get('fingerprint')}:{service_name}",
+                        "incident_session_id": f"{job.get('id')}:{hop}"}
+            seeds_by_service[service_name] = seed
+            # Code opens the ticket (and its ServiceNow record) before the model runs: a small LLM may skip the
+            # call or attach the investigation to an old ticket it remembers from incident history.
+            opened = OpenTicket().invoke(
+                {"service_name": service_name, "short_description": f"{job['alert_name']} on {service_name}",
+                 "priority": "2 - High"}, seed)
+            if isinstance(opened, str):
+                raise ValueError("Could not bind a ticket for this alert investigation.")
+            if hop == 0:
+                job["report"] = report
+                job["ticket_number"] = seed["sentinel_ticket_number"]
+                _persist(job)
+            response = invoke_agent(report, sly_data=seed)
+            sly_data = checked_result(seed, response.get("sly_data") or {}, TicketStore())
+            return sly_data, response
+
+        sly_data, response, chain = run_investigation_chain(investigate_one, job.get("service"))
+        job["dependency_chain"] = chain
+        if len(chain) > 1:
+            first_seed = seeds_by_service[chain[0]["service_name"]]
+            UpdateTicket().invoke({"number": chain[0]["ticket_number"], "work_note": summarize_chain(chain)},
+                                   first_seed)
         job["response"] = response.get("text", "")
         job["verified_facts"] = sly_data.get("sentinel_verified") or {}
         job["verified_markdown"] = format_verified_facts(sly_data)
-        job["ticket_number"] = sly_data.get("sentinel_ticket_number")
+        job["ticket_number"] = chain[0]["ticket_number"] if chain else sly_data.get("sentinel_ticket_number")
         job["state"] = "completed"
     except (OSError, ValueError, RuntimeError, KeyError) as exc:
         LOGGER.exception("Alertmanager job %s failed", job["id"])
@@ -142,7 +177,7 @@ def _queue_alert(alert: Dict[str, Any]) -> Dict[str, Any]:
     """Queues a normalized alert and suppresses Alertmanager retry duplicates."""
     fingerprint = str(alert.get("fingerprint") or "")
     if fingerprint:
-        existing_ticket = TicketStore().find_by_fingerprint(fingerprint)
+        existing_ticket = TicketStore().find_by_fingerprint(fingerprint, max_age_seconds=DEDUP_WINDOW_SECONDS)
         if existing_ticket:
             return {"status": "duplicate", "fingerprint": fingerprint, "ticket_number": existing_ticket.get("number")}
     ticket_count_before = len(TicketStore().load())
@@ -194,6 +229,10 @@ class AlertmanagerHandler(BaseHTTPRequestHandler):
 
     server_version = "SentinelAlertReceiver/1.0"
 
+    def setup(self) -> None:
+        super().setup()
+        self.connection.settimeout(REQUEST_TIMEOUT_SECONDS)
+
     def _send(self, status: int, body: Dict[str, Any]) -> None:
         """Writes a JSON response with explicit content length."""
         encoded = _json_bytes(body)
@@ -224,7 +263,11 @@ class AlertmanagerHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            content_length = int(self.headers.get("Content-Length", "0"))
+            if self.headers.get("Transfer-Encoding") or len(self.headers.get_all("Content-Length", [])) != 1:
+                raise ValueError("A single Content-Length header is required.")
+            content_length = int(self.headers["Content-Length"])
+            if content_length < 0:
+                raise ValueError("Content-Length must not be negative.")
         except ValueError:
             self._send(400, {"error": "invalid Content-Length"})
             return
@@ -233,7 +276,10 @@ class AlertmanagerHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            payload = json.loads(self.rfile.read(content_length))
+            raw = self.rfile.read(content_length)
+            if len(raw) != content_length:
+                raise ValueError("Incomplete request body.")
+            payload = json.loads(raw)
             raw_alerts = payload.get("alerts", [])
             if not isinstance(raw_alerts, list) or not raw_alerts:
                 raise ValueError("payload must contain at least one alert in 'alerts'")
@@ -261,6 +307,8 @@ class AlertmanagerHandler(BaseHTTPRequestHandler):
                 self.wfile.write(body)
             else:
                 self._send(202, {"accepted": accepted, "ignored": ignored, "receiver": "sentinel"})
+        except TimeoutError:
+            self._send(408, {"error": "Request body timed out."})
         except (json.JSONDecodeError, UnicodeDecodeError, AttributeError, TypeError, ValueError) as exc:
             self._send(400, {"error": str(exc)})
 

@@ -25,6 +25,7 @@ import requests
 from dotenv import load_dotenv
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 load_dotenv(REPO_ROOT / ".env")
 
 APP_URL = os.environ.get("SENTINEL_DEMO_APP_URL", "http://127.0.0.1:8000").rstrip("/")
@@ -70,18 +71,36 @@ def probe_checkout() -> str:
         return f"unreachable ({type(exc).__name__})"
 
 
+def confluence_status() -> str:
+    """Actually calls the configured Confluence space (not just checks env vars are set)."""
+    from coded_tools.sentinel.confluence_runbooks import ConfluenceRunbooks  # pylint: disable=import-outside-toplevel
+
+    confluence = ConfluenceRunbooks()
+    if not confluence.requested:
+        return "not configured"
+    if not confluence.configured:
+        return "partially configured: set base url, email, token and space key(s)"
+    try:
+        confluence.search("checkout")
+        return "reachable"
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        return f"configured but unreachable ({type(exc).__name__}: {exc})"
+
+
 def cmd_preflight(_args: argparse.Namespace) -> int:
     print("Preflight (read-only)")
+    confluence = confluence_status()
     results = [
         _check("checkout app healthy", _get(f"{APP_URL}/health").ok if _reachable(APP_URL) else False, APP_URL),
         _check("Prometheus reachable", _reachable(f"{PROMETHEUS}/-/ready"), PROMETHEUS),
         _check("Loki ready", _reachable(f"{LOKI}/ready"), LOKI),
-        _check("Sentinel UI up", _reachable(f"{SENTINEL_UI}/_stcore/health"), SENTINEL_UI),
+        _check("Sentinel UI up", _reachable(f"{SENTINEL_UI}/healthz"), SENTINEL_UI),
         _check("SENTINEL_MODE=live in .env", os.environ.get("SENTINEL_MODE", "demo").lower() == "live",
                "set it, then recreate the sentinel containers"),
         _check("GitHub token + repo configured", bool(os.environ.get("SENTINEL_GITHUB_TOKEN") and OWNER and REPO),
                f"{OWNER}/{REPO}" if OWNER and REPO else "missing"),
-        _check("Confluence configured", bool(os.environ.get("CONFLUENCE_BASE_URL") and os.environ.get("CONFLUENCE_API_TOKEN"))),
+        _check("Confluence (optional)" if confluence == "not configured" else "Confluence reachable",
+               confluence in ("not configured", "reachable"), confluence),
         _check("checkout demo app folder found", DEMO_APP_DIR.is_dir(), str(DEMO_APP_DIR)),
     ]
     rate = error_rate()

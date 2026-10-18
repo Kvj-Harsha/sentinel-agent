@@ -86,7 +86,8 @@ class SQLiteDatabase:
         self.path = Path(path) if path is not None else configured_path
         if seed_legacy_data is None:
             seed_from_legacy = self.path.resolve() == configured_path.resolve()
-            self.seed_legacy_data = seed_from_legacy or os.getenv("SENTINEL_SEED_LEGACY_DATA", "false").strip().lower() in {"1", "true", "yes", "on"}
+            seed_setting = os.getenv("SENTINEL_SEED_LEGACY_DATA")
+            self.seed_legacy_data = seed_from_legacy if seed_setting is None else seed_setting.strip().lower() in {"1", "true", "yes", "on"}
         else:
             self.seed_legacy_data = seed_legacy_data
         self._initialized = False

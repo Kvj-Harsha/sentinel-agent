@@ -1,6 +1,7 @@
 """Coded tool that opens a new synthetic ServiceNow-style incident ticket."""
 
 import logging
+import os
 import uuid
 from datetime import datetime
 from datetime import timezone
@@ -16,6 +17,7 @@ from coded_tools.sentinel.service_names import canonical_service_name
 from coded_tools.sentinel import servicenow_client
 from coded_tools.sentinel.schemas import redact_text
 from coded_tools.sentinel.ticket_store import TicketStore
+from coded_tools.sentinel.ticket_binding import owns_ticket
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +68,8 @@ class OpenTicket(CodedTool):
         if existing_number:
             existing = self.store.get(existing_number)
             if existing is not None:
+                if not owns_ticket(existing, sly_data):
+                    return "Error: Ticket does not belong to this incident session."
                 logger.debug("OpenTicket reusing existing ticket %s for this conversation", existing_number)
                 return {
                     "number": existing["number"],
@@ -77,10 +81,11 @@ class OpenTicket(CodedTool):
 
         fingerprint = str(sly_data.get("alert_fingerprint") or sly_data.get("fingerprint") or "").strip()
         if fingerprint:
-            existing = self.store.find_by_fingerprint(fingerprint)
+            existing = self.store.find_by_fingerprint(
+                fingerprint, max_age_seconds=int(os.environ.get("SENTINEL_DEDUP_WINDOW_SECONDS", "1800")))
             if existing is not None:
                 sly_data[TICKET_NUMBER_KEY] = existing["number"]
-                sly_data.setdefault("incident_session_id", existing.get("session_id"))
+                sly_data["incident_session_id"] = existing.get("session_id")
                 return {
                     "number": existing["number"],
                     "state": existing["state"],
@@ -121,6 +126,8 @@ class OpenTicket(CodedTool):
         }
         self._mirror_to_servicenow(ticket, priority)
         ticket = self.store.append(ticket)
+        # A concurrent fingerprint append may return the canonical existing ticket.
+        sly_data["incident_session_id"] = ticket["session_id"]
         sly_data[TICKET_NUMBER_KEY] = ticket["number"]
         if servicenow_client.is_configured():
             self.store.append_audit_event(

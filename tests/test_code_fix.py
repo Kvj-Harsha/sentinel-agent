@@ -93,3 +93,81 @@ def test_merged_code_replaces_the_file_atomically(tmp_path):
     pr._atomic_write(target, "new\n")
     assert target.read_text(encoding="utf-8") == "new\n"
     assert [p.name for p in tmp_path.iterdir()] == ["pricing.py"]  # no temp file left behind
+
+
+def test_atomic_replace_retries_transient_windows_access_error(tmp_path, monkeypatch):
+    from coded_tools.sentinel import github_pr_client as pr
+
+    target = tmp_path / "pricing.py"
+    target.write_text("old\n", encoding="utf-8")
+    replace = pr.os.replace
+    attempts = []
+
+    def transient(source, destination):
+        attempts.append(source)
+        if len(attempts) == 1:
+            assert target.read_text() == "old\n"
+            error = PermissionError("fixture temporary file lock")
+            error.winerror = 5
+            raise error
+        replace(source, destination)
+
+    monkeypatch.setattr(pr.os, "replace", transient)
+    monkeypatch.setattr(pr.time, "sleep", lambda _: None)
+    pr._atomic_write(target, "new\n")
+    assert len(attempts) == 2
+    assert target.read_bytes() == b"new\n"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["pricing.py"]
+
+
+def test_atomic_replace_permanent_windows_error_preserves_original(tmp_path, monkeypatch):
+    from coded_tools.sentinel import github_pr_client as pr
+
+    target = tmp_path / "pricing.py"
+    target.write_bytes(b"old\n")
+    attempts = []
+
+    def denied(*args):
+        attempts.append(args)
+        error = PermissionError("fixture persistent denial")
+        error.winerror = 32
+        raise error
+
+    monkeypatch.setattr(pr.os, "replace", denied)
+    monkeypatch.setattr(pr.time, "sleep", lambda _: None)
+    with pytest.raises(PermissionError, match="persistent denial"):
+        pr._atomic_write(target, "new\n")
+    assert len(attempts) == 5
+    assert target.read_bytes() == b"old\n"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["pricing.py"]
+
+
+def test_atomic_replace_other_permission_error_is_not_retried(tmp_path, monkeypatch):
+    from coded_tools.sentinel import github_pr_client as pr
+
+    target = tmp_path / "pricing.py"
+    target.write_bytes(b"old\n")
+    attempts = []
+
+    def denied(*args):
+        attempts.append(args)
+        raise PermissionError("fixture non-Windows denial")
+
+    monkeypatch.setattr(pr.os, "replace", denied)
+    with pytest.raises(PermissionError):
+        pr._atomic_write(target, "new\n")
+    assert len(attempts) == 1
+    assert target.read_bytes() == b"old\n"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["pricing.py"]
+
+
+def test_atomic_replace_preserves_existing_file_permissions(tmp_path):
+    from coded_tools.sentinel import github_pr_client as pr
+
+    target = tmp_path / "pricing.py"
+    target.write_bytes(b"old\n")
+    target.chmod(0o640)
+    permissions = target.stat().st_mode & 0o777
+    pr._atomic_write(target, "new\n")
+    assert target.read_bytes() == b"new\n"
+    assert target.stat().st_mode & 0o777 == permissions

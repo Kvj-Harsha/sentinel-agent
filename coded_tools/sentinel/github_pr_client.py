@@ -6,6 +6,8 @@ import json
 import logging
 import os
 import re
+import tempfile
+import time
 from pathlib import Path
 from typing import Any
 from typing import Dict
@@ -410,6 +412,29 @@ def sync_merged_settings(
 def _atomic_write(path: Path, text: str) -> None:
     """Replace the file in one step so the running app never reads a half-written module."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(text, encoding="utf-8")
-    os.replace(temporary, path)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", newline="", dir=path.parent,
+                                         prefix=f".{path.name}.", suffix=".tmp", delete=False) as handle:
+            temporary = Path(handle.name)
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            permissions = path.stat().st_mode & 0o777
+        except FileNotFoundError:
+            permissions = 0o644
+        temporary.chmod(permissions)
+        for attempt in range(5):
+            try:
+                os.replace(temporary, path)
+                break
+            except PermissionError as exc:
+                # Windows readers/scanners can temporarily deny rename/delete.
+                # Keep the old file intact; permanent errors still propagate.
+                if getattr(exc, "winerror", None) not in {5, 32, 33} or attempt == 4:
+                    raise
+                time.sleep(0.02 * (2 ** attempt))
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)

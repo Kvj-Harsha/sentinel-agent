@@ -1,0 +1,9 @@
+{
+  "checkout-service": ["inventory-service"],
+  "payments-gateway": ["fraud-check-service"],
+  "inventory-service": ["notification-service"],
+  "auth-service": [],
+  "fraud-check-service": [],
+  "notification-service": [],
+  "search-service": []
+}

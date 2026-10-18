@@ -24,6 +24,8 @@ from coded_tools.sentinel.schemas import utc_now
 from coded_tools.sentinel.verified_facts import publish
 from coded_tools.sentinel.verified_facts import publish_evidence
 from coded_tools.sentinel.confluence_runbooks import ConfluenceRunbooks
+from coded_tools.sentinel.confluence_cache import cached_get_page
+from coded_tools.sentinel.confluence_cache import cached_search
 from coded_tools.sentinel.mode import demo_mode
 
 logger = logging.getLogger(__name__)
@@ -85,7 +87,7 @@ class RunbookSearch(CodedTool):
             if not confluence.configured:
                 return unavailable_result("confluence", "Confluence is partially configured; set the account email and explicit space key(s) in .env.")
             try:
-                runbooks = confluence.search(query)
+                runbooks = cached_search(confluence, query)
                 source = "confluence"
                 source_status = SourceStatus.LIVE
             except (requests.RequestException, ValueError, RuntimeError) as exc:
@@ -123,7 +125,7 @@ class RunbookSearch(CodedTool):
         best = scored[0]
         if source_status == SourceStatus.LIVE:
             try:
-                best.update(confluence.get_page(best["page_id"]))
+                best.update(cached_get_page(confluence, best["page_id"]))
             except (requests.RequestException, ValueError, RuntimeError) as exc:
                 logger.warning("Confluence selected-page lookup failed (%s).", type(exc).__name__)
                 return unavailable_result("confluence", "Could not read the selected Confluence runbook page; check connector health and permissions.")

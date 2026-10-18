@@ -11,12 +11,14 @@ using the tool-published source records keeps the evaluation loop independent of
 
 import logging
 from datetime import datetime
+from datetime import timedelta
 from typing import Any
 from typing import Dict
 from typing import Union
 
 from neuro_san.interfaces.coded_tool import CodedTool
 
+from coded_tools.sentinel.incident_context import CONTEXT_KEY
 from coded_tools.sentinel.service_names import canonical_service_name
 
 from coded_tools.sentinel.ticket_notes import add_note
@@ -35,6 +37,26 @@ def _parse(ts: str) -> datetime:
     return datetime.fromisoformat(ts.replace("Z", "+00:00"))
 
 
+ALERT_LAG_MARGIN_MINUTES = 3
+
+
+def _current_episode(anomalies: list, sly_data: Dict[str, Any]) -> list:
+    """
+    Keep only errors from the incident the alert is about. The query window can still hold errors from an earlier
+    incident on the same service, which would otherwise be read as this incident's start. The alert fires shortly
+    after the first errors, so errors up to a few minutes before it still belong to this incident.
+    """
+    starts_at = (sly_data.get(CONTEXT_KEY) or {}).get("starts_at")
+    if not starts_at:
+        return anomalies
+    try:
+        cutoff = _parse(starts_at) - timedelta(minutes=ALERT_LAG_MARGIN_MINUTES)
+        recent = [item for item in anomalies if _parse(item["event_time"]) >= cutoff]
+    except ValueError:
+        return anomalies
+    return recent or anomalies
+
+
 def _earliest_anomaly(service_name: str, sly_data: Dict[str, Any]) -> Dict[str, Any]:
     """Use timestamps published by the deterministic log tool, never LLM-relayed prose."""
     evidence = (sly_data.get("sentinel_verified") or {}).get("evidence") or []
@@ -46,6 +68,7 @@ def _earliest_anomaly(service_name: str, sly_data: Dict[str, Any]) -> Dict[str, 
         and record.get("source_status") in {"live", "fixture"}
     ]
     anomalies.sort(key=lambda record: record["event_time"])
+    anomalies = _current_episode(anomalies, sly_data)
     if not anomalies:
         return None
     first = anomalies[0]

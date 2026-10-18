@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import sqlite3
 import threading
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from typing import Dict
 from typing import List
@@ -74,8 +75,11 @@ class TicketStore:
                 tickets = self.load()
                 fingerprint = ticket.get("alert_fingerprint")
                 if fingerprint:
-                    existing = next((item for item in reversed(tickets) if item.get("alert_fingerprint") == fingerprint), None)
-                    if existing:
+                    existing = next((item for item in reversed(tickets)
+                                     if item.get("alert_fingerprint") == fingerprint and item.get("state") != "Resolved"), None)
+                    cutoff = datetime.now(timezone.utc) - timedelta(
+                        seconds=int(os.environ.get("SENTINEL_DEDUP_WINDOW_SECONDS", "1800")))
+                    if existing and _created_after(existing, cutoff):
                         return existing
                 if any(item.get("number") == ticket.get("number") for item in tickets):
                     ticket["number"] = self._next_number_from(tickets)
@@ -87,9 +91,13 @@ class TicketStore:
             fingerprint = ticket.get("alert_fingerprint")
             if fingerprint:
                 row = connection.execute(
-                    "SELECT data_json FROM tickets WHERE fingerprint = ? ORDER BY rowid DESC LIMIT 1", (fingerprint,)
+                    "SELECT data_json FROM tickets WHERE fingerprint = ? "
+                    "AND COALESCE(json_extract(data_json, '$.state'), '') != 'Resolved' "
+                    "ORDER BY rowid DESC LIMIT 1", (fingerprint,)
                 ).fetchone()
-                if row:
+                cutoff = datetime.now(timezone.utc) - timedelta(
+                    seconds=int(os.environ.get("SENTINEL_DEDUP_WINDOW_SECONDS", "1800")))
+                if row and _created_after(json.loads(row["data_json"]), cutoff):
                     return json.loads(row["data_json"])
             if connection.execute("SELECT 1 FROM tickets WHERE number = ?", (ticket["number"],)).fetchone():
                 row = connection.execute("SELECT number FROM tickets").fetchall()
@@ -128,7 +136,8 @@ class TicketStore:
             row = connection.execute("SELECT data_json FROM tickets WHERE number = ?", (number,)).fetchone()
         return sanitize_record(json.loads(row["data_json"])) if row else None
 
-    def find_by_fingerprint(self, fingerprint: str, include_resolved: bool = False) -> Optional[Dict[str, Any]]:
+    def find_by_fingerprint(self, fingerprint: str, include_resolved: bool = False,
+                            max_age_seconds: Optional[int] = None) -> Optional[Dict[str, Any]]:
         """
         Newest ticket for an alert fingerprint. Resolved tickets are skipped by default: the same alert firing again
         after its incident was fixed is a new incident, not a retry of the old one.
@@ -143,6 +152,10 @@ class TicketStore:
                     "SELECT data_json FROM tickets WHERE fingerprint = ? ORDER BY rowid DESC", (fingerprint,)
                 ).fetchall()
             candidates = [sanitize_record(json.loads(row["data_json"])) for row in rows]
+        if max_age_seconds is not None:
+            # An old open ticket must not swallow a new firing of the same alert (the fingerprint is label-based).
+            cutoff = datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)
+            candidates = [item for item in candidates if _created_after(item, cutoff)]
         return next((item for item in candidates if include_resolved or item.get("state") != "Resolved"), None)
 
     def update(self, number: str, changes: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -212,3 +225,14 @@ class TicketStore:
                 "FROM audit_events WHERE entity_type = ? AND entity_id = ? ORDER BY id", (entity_type, entity_id)
             ).fetchall()
         return [{**dict(row), "details": json.loads(row["details_json"])} for row in rows]
+
+
+def _created_after(ticket: Dict[str, Any], cutoff: datetime) -> bool:
+    """:return: True when the ticket was created after ``cutoff`` (unparseable timestamps count as old)."""
+    try:
+        created = datetime.fromisoformat(str(ticket.get("sys_created_on")).replace("Z", "+00:00").replace(" ", "T"))
+    except ValueError:
+        return False
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=timezone.utc)
+    return created >= cutoff

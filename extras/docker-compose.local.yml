@@ -1,0 +1,21 @@
+# Applied last by scripts/compose.ps1. These explicit values override env_file.
+# Keep read-only evidence and LLM configuration; remove remote write credentials.
+x-local-environment: &local-environment
+  SENTINEL_STORAGE_BACKEND: sqlite
+  SERVICENOW_ENABLED: "false"
+  SERVICENOW_INSTANCE: ""
+  SERVICENOW_USER: ""
+  SERVICENOW_PASSWORD: ""
+  SENTINEL_AUTO_PR: "false"
+  SENTINEL_GITHUB_TOKEN: ""
+
+services:
+  sentinel:
+    environment: *local-environment
+  sentinel-webhook:
+    environment:
+      <<: *local-environment
+      SENTINEL_WEBHOOK_TOKEN: ""
+      SENTINEL_WEBHOOK_TOKEN_FILE: /run/secrets/sentinel_webhook_token
+    volumes:
+      - alertmanager-secrets:/run/secrets:ro

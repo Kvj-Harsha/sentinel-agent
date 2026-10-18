@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#172522">
+  <title>Sentinel · Incident operations</title>
+  <meta name="description" content="Evidence-backed incident response with a validated fix and human approval.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23087e70'/%3E%3Cpath d='M16 5l9 4v6c0 6-3.5 10-9 13-5.5-3-9-7-9-13V9z' fill='none' stroke='white' stroke-width='2'/%3E%3Cpath d='m12 16 2.7 2.7 5.7-6' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar" aria-label="Main navigation">
+      <a class="brand" href="#main" aria-label="Sentinel home">
+        <svg class="logo" viewBox="0 0 40 40" aria-hidden="true"><rect width="40" height="40" rx="12"/><path d="M20 7l11 5v7c0 7-4.2 11.8-11 15-6.8-3.2-11-8-11-15v-7z"/><path d="m15 19 3.5 3.5 7-7"/></svg>
+        <span><strong>sentinel</strong><small>INCIDENT OPERATIONS</small></span>
+      </a>
+      <div class="side-label">INCIDENTS</div>
+      <nav class="side-nav">
+        <a class="nav-item active" aria-current="page" href="#overview"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M3 3h5v5H3zM12 3h5v5h-5zM3 12h5v5H3zM12 12h5v5h-5z"/></svg></span> Overview</a>
+        <a class="nav-item" href="#ticket-card"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M5 2.8h7l3 3V17H5zM12 3v3h3M7.5 10h5M7.5 13h5"/></svg></span> Incident ticket</a>
+        <a class="nav-item" href="#evidence-card"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 20 20"><circle cx="8.5" cy="8.5" r="5.5"/><path d="m13 13 4 4M6 9h5M8.5 6.5v5"/></svg></span> Evidence</a>
+        <a class="nav-item" href="#repair-card"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="m12.8 4.2 3 3-8.5 8.5H4.2v-3.1zM11 6l3 3"/></svg></span> Fix &amp; review</a>
+        <a class="nav-item" href="#jobs-card"><span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M3 15.5V4.5M3 15.5h14M6 12l3-3 2 2 4-5"/></svg></span> Alert activity</a>
+      </nav>
+      <div class="sidebar-spacer"></div>
+      <div class="side-status">
+        <div><strong>Human review required</strong><small>Changes wait for approval</small></div>
+      </div>
+      <div class="side-foot">SENTINEL <span>·</span> INCIDENT RESPONSE</div>
+    </aside>
+
+    <div class="main-column">
+      <header class="topbar">
+        <button class="icon-btn menu-btn" id="menu-toggle" type="button" aria-label="Open navigation" aria-expanded="false"><span></span><span></span><span></span></button>
+        <div class="crumb"><span>Workspace</span><b>/</b><strong>Incident response</strong></div>
+        <div class="top-actions"><div class="pills" id="pills" aria-label="Connection status"></div>
+          <button class="icon-btn theme-btn" id="theme" type="button" aria-label="Toggle colour theme" title="Toggle theme"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>
+        </div>
+      </header>
+
+      <main id="main" class="page">
+        <section class="page-heading" id="overview">
+          <div><p class="eyebrow">OPERATIONS / CHECKOUT SERVICE</p><h1>Incident response</h1>
+            <p class="heading-copy">Review the alert, verified evidence, and proposed action in one place.</p></div>
+          <a class="checkout-link" id="demo-link" href="#" target="_blank" rel="noopener noreferrer" hidden>Open checkout service <span aria-hidden="true">↗</span></a>
+        </section>
+
+        <section class="card intake" aria-labelledby="start-h">
+          <div class="intake-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 17v3h14v-3"/></svg></div>
+          <div class="intake-copy"><div class="section-kicker">ALERT INTAKE</div><h2 id="start-h">Investigate an alert</h2>
+            <p>Choose a sample alert or open the checkout service to send a live local alert.</p></div>
+          <form class="start-actions" id="start-form">
+            <label class="field"><span>Sample scenario</span><select id="preset" aria-label="Sample alert"></select></label>
+            <div class="btn-row"><button class="btn primary" type="submit" id="go">Investigate sample</button><button class="btn secondary" type="button" id="new">New incident</button></div>
+          </form>
+        </section>
+
+        <section class="summary-strip" id="summary-stats" aria-label="Incident summary">
+          <div class="summary-item"><small>ACTIVE INCIDENT</small><strong id="stat-incident">No incident</strong></div>
+          <div class="summary-item"><small>VERIFIED EVIDENCE</small><strong id="stat-sources">Awaiting evidence</strong></div>
+          <div class="summary-item"><small>ROOT-CAUSE CHECK</small><strong id="stat-verdict">Not evaluated</strong></div>
+          <div class="summary-item"><small>CHANGE CONTROL</small><strong>Human approval required</strong></div>
+        </section>
+
+        <div class="banner" id="banner" role="status" hidden></div>
+        <section class="progress-panel" aria-label="Incident progress"><nav class="stepper" id="stepper" aria-label="Incident progress"></nav></section>
+
+        <div class="workspace-grid">
+          <div class="workspace-main">
+            <section class="module" id="ticket-card" aria-labelledby="t-h"><div class="module-head"><div class="module-title"><div><h2 id="t-h">Incident ticket</h2><p>Ownership, priority and response history</p></div></div><span class="module-count" id="ticket-count">LOCAL TICKET</span></div><div id="ticket"></div></section>
+            <section class="module" id="verdict-card" aria-labelledby="v-h" hidden><div class="module-head"><div class="module-title"><div><h2 id="v-h">Root-cause assessment</h2><p>Deterministic correlation from recorded evidence</p></div></div></div><div id="verdict"></div></section>
+            <section class="module" id="chain-card" aria-labelledby="ch-h" hidden><div class="module-head"><div class="module-title"><div><h2 id="ch-h">Dependency chain</h2><p>Recursively re-investigated when a hop is not supported</p></div></div></div><div id="chain"></div></section>
+            <section class="module" id="evidence-card" aria-labelledby="e-h"><div class="module-head"><div class="module-title"><div><h2 id="e-h">Evidence</h2><p>Records gathered by deterministic tools</p></div></div><span class="module-count">SOURCE STATUS</span></div><div id="evidence"></div></section>
+          </div>
+          <div class="workspace-side">
+            <section class="module repair-module" id="repair-card" aria-labelledby="r-h"><div class="module-head"><div class="module-title"><div><h2 id="r-h">Proposed fix</h2><p>Validated change · human approval required</p></div></div></div><div id="repair"></div></section>
+            <section class="module" id="jobs-card" aria-labelledby="a-h"><div class="module-head"><div class="module-title"><div><h2 id="a-h">Alert activity</h2><p>Prometheus → Alertmanager → Sentinel</p></div></div><span class="live-mark"><i></i> WATCHING</span></div><div id="jobs"></div></section>
+          </div>
+        </div>
+
+        <section class="conversation" aria-labelledby="c-h">
+          <div class="module-head"><div class="module-title"><div><h2 id="c-h">Investigation notes</h2><p>Agent narrative alongside verified tool output</p></div></div></div>
+          <div id="messages" aria-live="polite"></div>
+          <form class="composer" id="chat-form"><label class="sr" for="chat-input">Ask about this incident</label><textarea id="chat-input" rows="2" placeholder="Ask a question or add context to this investigation…"></textarea><button class="btn primary" type="submit" id="send">Send <span aria-hidden="true">↑</span></button></form>
+          <p class="composer-hint">Press <kbd>Ctrl</kbd> + <kbd>Enter</kbd> to send</p>
+        </section>
+
+        <footer class="foot"><details><summary>Data sources and scope <span>+</span></summary><ul>
+          <li><strong>Alerts:</strong> Prometheus and Alertmanager (live) or sample payloads. Evidence is labelled live, fixture or unavailable.</li>
+          <li><strong>Metrics and logs:</strong> Prometheus and Loki queries made by coded tools, never by the model.</li>
+          <li><strong>Deployments:</strong> GitHub Deployments. A commit is not treated as proof of a deployment.</li>
+          <li><strong>Runbooks:</strong> Confluence when configured, otherwise bundled fixtures.</li>
+          <li><strong>Tickets:</strong> local SQLite with a ServiceNow mirror when configured.</li>
+          <li><strong>Fix:</strong> The FixAgent proposes a bounded change. Code validates it; a human reviews and merges.</li>
+        </ul></details><div class="footer-meta"><span>Sentinel Incident Operations</span><span>Evidence first · Human reviewed</span><span id="perf-strip" class="muted"></span></div></footer>
+      </main>
+    </div>
+  </div>
+  <div class="mobile-scrim" id="mobile-scrim"></div>
+  <div class="toast" id="toast" role="alert" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>

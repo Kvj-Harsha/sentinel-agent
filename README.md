@@ -1,5 +1,12 @@
 # Sentinel
 
+[![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](requirements.txt)
+[![Framework: neuro-san](https://img.shields.io/badge/framework-neuro--san-2F6FEE)](https://github.com/cognizant-ai-lab/neuro-san)
+[![Agents: HOCON-declared](https://img.shields.io/badge/agents-HOCON--declared-2F6FEE)](registries/sentinel.hocon)
+[![Tests: pytest](https://img.shields.io/badge/tests-pytest-0A9EDC?logo=pytest&logoColor=white)](tests/)
+[![Docker Compose](https://img.shields.io/badge/deploy-docker%20compose-2496ED?logo=docker&logoColor=white)](extras/docker-compose.app.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](#license)
+
 **An incident-triage agent network that refuses to guess.** An alert fires; a team of neuro-san agents gathers logs,
 metrics, deploy history and runbook evidence; a *deterministic* check decides whether the evidence supports a root
 cause; Sentinel opens a ticket and proposes a bounded fix that a **human** reviews and merges.
@@ -7,6 +14,10 @@ cause; Sentinel opens a ticket and proposes a bounded fix that a **human** revie
 > LLMs route and explain. Coded tools decide. Every piece of evidence is labelled `fixture`, `live` or `unavailable`.
 
 Built on Cognizant's [neuro-san](https://github.com/cognizant-ai-lab/neuro-san) framework (agents declared in HOCON).
+
+<p align="center">
+  <img src="docs/screenshots/dashboard.jpg" alt="Sentinel incident response dashboard showing the alert timeline, verified evidence, proposed fix and investigation notes" width="860">
+</p>
 
 ## 60-second demo
 

@@ -32,6 +32,9 @@ docs/diagrams/*.fls
 docs/diagrams/*.fdb_latexmk
 docs/diagrams/*.synctex.gz
 
+# Hackathon screenshots / scratch demo captures
+docs/screenshots/
+
 # Editors / OS
 .idea/
 .vscode/

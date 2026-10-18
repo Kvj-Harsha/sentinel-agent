@@ -53,6 +53,10 @@ def main() -> int:
         connection.execute("DELETE FROM tickets")
         connection.execute("DELETE FROM incident_history")
         connection.execute("DELETE FROM audit_events")
+        # Also clear UI conversation state and webhook job history -- otherwise an old resumed
+        # conversation or a stale alert job keeps showing in the dashboard after a reset.
+        connection.execute("DELETE FROM conversations")
+        connection.execute("DELETE FROM alert_jobs")
     if not options.database_only:
         for path in (TICKETS_JSON, HISTORY_JSON):
             path.write_text("[]\n", encoding="utf-8")

@@ -1,0 +1,8 @@
+# Lint-only configuration used by CI (.github/workflows/ci.yml).
+line-length = 120
+target-version = "py312"
+extend-exclude = ["docs/archive"]
+
+[lint]
+# pycodestyle errors and pyflakes: real bugs and dead imports, no style churn.
+select = ["E4", "E7", "E9", "F"]

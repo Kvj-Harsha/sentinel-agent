@@ -7,7 +7,6 @@ import logging
 import os
 from pathlib import Path
 import re
-import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
 from typing import Any

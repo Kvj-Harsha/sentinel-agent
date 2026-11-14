@@ -1,5 +1,4 @@
 """Regression coverage for web integration and safe local startup."""
-import copy
 import http.client
 import json
 import os

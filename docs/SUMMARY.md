@@ -80,5 +80,5 @@ change to the agents or their instructions — only the coded tool implementatio
 - `extras/` — the optional Docker/Prometheus/Alertmanager/Loki stack for a full live-mode local demo.
 - `tests/` — an offline pytest suite (no LLM, no network) covering the deterministic tools.
 - `eval/` — opt-in live-LLM evaluation scenarios.
-- `docs/` — detailed architecture notes and the diagram sources; see [`architecture.md`](architecture.md) for the
-  full write-up and [`README.md`](README.md) for setup and run instructions.
+- `docs/` — architecture notes, diagrams and runbooks; see [`ARCHITECTURE.md`](ARCHITECTURE.md) for the
+  full write-up and [`README.md`](../README.md) for setup and run instructions.

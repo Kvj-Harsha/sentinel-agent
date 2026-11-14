@@ -5,12 +5,12 @@ pydantic>=2.0,<3
 # Loads OPENAI_API_KEY (and optional overrides) from a local .env file
 python-dotenv>=1.0.1
 
-# GitHub REST API call in coded_tools/sentinel/github_deploy_lookup.py
+# HTTP clients for GitHub, Prometheus, Loki, Confluence and ServiceNow (coded_tools/sentinel/)
 requests>=2.31.0
 
-# Web frontend (frontend/run.py)
+# Legacy Streamlit UI (apps/sentinel/ui.py); the default UI is apps/sentinel/web.py
 streamlit>=1.40.0
 
-# Tests (tests/test_tools.py)
+# Tests (tests/)
 pytest>=8.0.0
 pyyaml>=6.0

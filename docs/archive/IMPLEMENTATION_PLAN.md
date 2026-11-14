@@ -1,4 +1,4 @@
-> **Archived.** This was the original enterprise roadmap; paths below predate the restructure (backend/ -> registries/, coded_tools/, apps/sentinel/, extras/). See ../docs/ARCHITECTURE.md for the current design.
+> **Archived.** This was the original enterprise roadmap; paths below predate the restructure (backend/ -> registries/, coded_tools/, apps/sentinel/, extras/). See ../ARCHITECTURE.md for the current design.
 
 # Sentinel: Incremental Architecture and Integration Plan
 
@@ -158,7 +158,7 @@ validator passed, and `git diff --check` passed; the test suite was not run.
 
 ### Step 2 — Make the local monitoring demo reproducible
 
-**Status: implemented and exercised locally (2026-10-16).** Added [the local alerting runbook](LOCAL_ALERTING_DEMO.md) and
+**Status: implemented and exercised locally (2026-10-16).** Added [the local alerting runbook](../../extras/LOCAL_ALERTING_DEMO.md) and
 made receiver health visible in the Streamlit Alertmanager panel. The existing checkout app and Prometheus were
 already running and healthy, so they were reused. Docker Desktop failed to bind-mount the Alertmanager config/token
 and k6 script from this workspace; Alertmanager was restored with the same config and a Docker-managed token copy,

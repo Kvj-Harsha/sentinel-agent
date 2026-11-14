@@ -7,7 +7,6 @@ import logging
 import os
 from pathlib import Path
 import re
-import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -46,13 +45,15 @@ class TicketStore:
 
     def load(self) -> List[Dict[str, Any]]:
         if self.backend == "json":
-            if not self.data_file.exists():
-                return []
-            try:
-                content = self.data_file.read_text(encoding="utf-8")
-            except OSError as exc:
-                logger.warning("Could not read ticket store file %s: %s", self.data_file, exc)
-                return []
+            # Writers truncate then rewrite the file under _LOCK; read under it too so a concurrent read never sees it empty.
+            with _LOCK:
+                if not self.data_file.exists():
+                    return []
+                try:
+                    content = self.data_file.read_text(encoding="utf-8")
+                except OSError as exc:
+                    logger.warning("Could not read ticket store file %s: %s", self.data_file, exc)
+                    return []
             return sanitize_record(json.loads(content)) if content.strip() else []
         with self.db.connection() as connection:
             rows = connection.execute("SELECT data_json FROM tickets ORDER BY rowid").fetchall()

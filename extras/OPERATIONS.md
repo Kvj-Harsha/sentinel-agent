@@ -1,6 +1,6 @@
 # Local container operations
 
-This profile packages Sentinel's Streamlit UI and Alertmanager receiver as separate containers. It is for a
+This profile packages Sentinel's web UI (`apps/sentinel/web.py`) and Alertmanager receiver as separate containers. It is for a
 single-machine demo. It does not provide production TLS termination, multi-host storage, or a managed secret store.
 
 ## Prerequisites and start

@@ -30,7 +30,7 @@ DATA_FILE = Path(__file__).parent / "data" / "logs.json"
 # without token-based matching at all), a realistic multi-word query like "payment
 # authorization failures" never matched anything, because the original implementation
 # required the ENTIRE query string to appear verbatim as a substring -- caught by the
-# automated eval harness (eval/run_eval.py), see summary.md.
+# automated eval harness (eval/run_eval.py), see docs/SUMMARY.md.
 QUERY_STOPWORDS = frozenset(
     {
         "a", "an", "the", "on", "after", "for", "from", "with", "to", "of", "in", "at",

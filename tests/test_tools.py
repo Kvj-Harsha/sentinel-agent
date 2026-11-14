@@ -7,7 +7,6 @@ Run with:  pytest
 from pathlib import Path
 
 import pytest
-import requests
 from alerts import compose_incident_report
 from alerts import list_presets
 from alerts import load_preset

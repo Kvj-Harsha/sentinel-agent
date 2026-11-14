@@ -1,3 +1,5 @@
+> **Archived.** Superseded by [docs/SUMMARY.md](../SUMMARY.md); kept for history.
+
 # Project Summary
 
 ## What We Built
@@ -55,7 +57,7 @@ The key idea: **the LLMs route and explain; deterministic tools decide.** Tools 
 state and the memory write are enforced in code too, so a model that forgets or repeats a tool call cannot leave the
 system wrong.
 
-![Architecture](docs/diagrams/architecture.png)
+![Architecture](../diagrams/architecture.png)
 
 ---
 
